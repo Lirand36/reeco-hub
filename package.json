@@ -1,0 +1,12 @@
+{
+  "name": "reeco-hub-concept",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Concept: an internal Sales, Support & CS workspace for Reeco on top of HubSpot, Intercom, Jira, Slack and Snowflake.",
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.js",
+    "dev": "node --watch --env-file-if-exists=.env server.js"
+  },
+  "engines": { "node": ">=22" }
+}

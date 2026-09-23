@@ -1,0 +1,15 @@
+# One-click deploy: Render dashboard → New → Blueprint → pick this repo.
+services:
+  - type: web
+    name: reeco-hub-concept
+    runtime: node
+    plan: free
+    buildCommand: "true"
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # Used in Slack messages for "Open in Reeco Hub" links, e.g. https://reeco-hub-concept.onrender.com
+      - key: PUBLIC_URL
+        sync: false
