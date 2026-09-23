@@ -2,6 +2,7 @@
 // Each action carries a CTA the UI can render as a link or as a one-click API call.
 
 import { CONFIG, ONBOARDING_STEPS, db } from './store.js';
+import { classificationLabel } from './classify.js';
 
 const RANK = { urgent: 0, high: 1, normal: 2, info: 3 };
 const money = (n) => '$' + Math.round(n).toLocaleString('en-US');
@@ -41,7 +42,7 @@ function support(user) {
       badge: a.segment === 'Enterprise' ? 'Enterprise' : null,
       tags: [
         m == null ? null : m < 0 ? { text: `Reply overdue ${fmtMins(-m)}`, tone: 'bad' } : { text: `Reply due in ${fmtMins(m)}`, tone: m <= 30 ? 'warn' : '' },
-        ...(c.flagged ?? []).filter((f) => f !== 'Enterprise account').map((f) => ({ text: f, tone: 'bad' })),
+        { text: classificationLabel(c.classification), tone: 'info' },
         c.escalatedTo ? { text: c.escalatedTo, tone: 'info' } : null,
       ].filter(Boolean),
       cta: link('Reply now', `#/inbox/${c.id}`),

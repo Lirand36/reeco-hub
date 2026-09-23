@@ -40,6 +40,7 @@ The same steps, with links, are in the app under the user menu (bottom-left) →
 2. **Deal desk.** *Northgate Inns* → **Request discount** 20% (the approval threshold is 15%). The request goes to `#deal-desk` with Approve/Reject buttons. Approve it from **Approvals**, either as *Eitan B. (Sales Manager)* or with **Simulate Slack click**.
 3. **Support.** Sign in as *Ron A. (Support)* and open **Inbox**.
    - **Queues:** Mine / Unassigned / Enterprise / Overdue / All open / Snoozed / Closed. **Assign to me**, change owner, or **Snooze** (1h, 4h, tomorrow). A snoozed conversation wakes up when the customer replies. Every change syncs to Intercom.
+   - **Classification:** every conversation is classified when it arrives: How-to, Reeco technical issue, Integration (naming the tool: NetSuite, Sage Intacct, QuickBooks…), Feature request, or Account / billing. Agents can correct it from the conversation; AI assist refines it. Each card shows three lines: reply due, classification, owner.
    - **Account snapshot** (right panel): health, ARR, CSM and AE, platform status from Snowflake (ERP, sync status, errors in 24h, app version), open Jira tickets, and past conversations with their close reasons.
    - **✨ AI assist:** one click gives a summary, the customer's mood, the likely category, a next step and a draft reply (Claude via the Anthropic API, or a rules-based stand-in in mock mode). **Use this reply** puts the draft in the reply box.
    - **Close with a reason:** closing always asks why (the AI's suggested category is preselected). The reason is tagged in Intercom and logged to Snowflake. The **Closed** tab charts why customers contact support.
@@ -59,7 +60,7 @@ The same steps, with links, are in the app under the user menu (bottom-left) →
 - Discounts above **15%** need Sales Manager approval.
 - Close reasons: Platform bug (fixed / workaround), ERP / integration, How-to, Feature request, Account / billing, No response.
 - SLA: **Enterprise 1h**, Mid-market and Independent **4h**.
-- Auto-flag to Slack: any Enterprise message, or an upset customer (keyword match).
+- Auto-flag to Slack: any Enterprise message, or an upset customer (keyword match). The flag drives the Slack alert; the inbox shows the classification instead.
 - Onboarding steps: vendors connected (auto), catalog & pricing, accounting/ERP integration, staff trained, first PO (auto), first AI-processed invoice (auto).
 
 ## Architecture

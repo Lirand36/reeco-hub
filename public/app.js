@@ -52,7 +52,6 @@ function urgency(c) {
   if (mins < 0) return { tone: 'bad', text: `Reply overdue ${fmtMins(-mins)}` };
   return { tone: mins <= 30 ? 'warn' : 'calm', text: `Reply due in ${fmtMins(mins)}` };
 }
-const flagsOf = (c) => (c.state === 'open' ? (c.flagged ?? []).filter((f) => f !== 'Enterprise account') : []);
 const segBadge = (seg) => (seg === 'Enterprise' ? '<span class="seg-badge" title="Enterprise customer">Enterprise</span>' : '');
 
 function confirmEscalate() {
@@ -635,13 +634,12 @@ async function renderInbox(selectedId) {
             <div class="ii-top"><span class="ii-name ellipsis">${esc(i.account.name)}</span>${segBadge(i.account.segment)}</div>
             <div class="ii-top"><span class="ii-subject ellipsis">${esc(i.subject)}</span><span class="ii-time muted xs">${rel(i.updatedAt)}</span></div>
             <div class="preview">${i.ai && i.ai.forMessages === i.messages.length ? `✨ ${esc(i.ai.summary)}` : esc(i.messages.at(-1)?.text)}</div>
-            <div class="ii-status">
-              ${i.state === 'closed' ? `<span class="st muted"><svg class="ico"><use href="#i-done"/></svg>${esc(reasonLabel(i.closeReason ?? '')) || 'Closed'}</span>`
-                : isSnoozed(i) ? `<span class="st info"><svg class="ico"><use href="#i-clock"/></svg>Snoozed until ${new Date(i.snoozedUntil).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</span>`
-                : urgency(i) ? `<span class="st ${urgency(i).tone}"><svg class="ico"><use href="#i-clock"/></svg>${urgency(i).text}</span>` : '<span></span>'}
-              ${flagsOf(i).length ? `<span class="st bad" title="${esc(flagsOf(i).join(', '))}"><svg class="ico"><use href="#i-alert"/></svg>${esc(flagsOf(i)[0])}</span>` : ''}
-              ${i.escalatedTo ? `<span class="st info mono">${esc(i.escalatedTo)}</span>` : ''}
-              <span class="ii-owner ${i.assignee ? '' : 'none'}" title="${i.assignee ? `Owner: ${esc(i.assignee)}` : 'Nobody owns this yet'}">${i.assignee ? `<span class="avatar xs" aria-hidden="true">${initials(i.assignee)}</span>${esc(i.assignee.split(' ')[0])}` : 'Unassigned'}</span>
+            <div class="ii-facts">
+              ${i.state === 'closed' ? `<div class="fact muted"><svg class="ico"><use href="#i-done"/></svg>Closed: ${esc(reasonLabel(i.closeReason ?? '')) || 'no reason'}</div>`
+                : isSnoozed(i) ? `<div class="fact info"><svg class="ico"><use href="#i-clock"/></svg>Snoozed until ${new Date(i.snoozedUntil).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</div>`
+                : urgency(i) ? `<div class="fact ${urgency(i).tone}"><svg class="ico"><use href="#i-clock"/></svg>${urgency(i).text}</div>` : ''}
+              <div class="fact"><svg class="ico"><use href="#i-tag"/></svg><span class="k">Classification:</span>${esc(i.classificationLabel)}${i.escalatedTo ? ` <span class="mono info-text">· ${esc(i.escalatedTo)}</span>` : ''}</div>
+              <div class="fact ${i.assignee ? '' : 'warn'}"><svg class="ico"><use href="#i-user"/></svg><span class="k">Owner:</span>${i.assignee ? esc(i.assignee) : 'Unassigned'}</div>
             </div>
           </a>`).join('') || `<div class="empty">${tab.id === 'mine' ? 'Nothing assigned to you. Check <b>Unassigned</b>.' : 'Nothing here.'}</div>`}
       </div>
@@ -671,8 +669,11 @@ async function renderInbox(selectedId) {
           </div>` : ''}
           <div class="ctx">
             ${urgency(sel) ? `<span class="st ${urgency(sel).tone}"><svg class="ico"><use href="#i-clock"/></svg>${urgency(sel).text}</span>` : ''}
+            <label class="st calm" for="classify"><svg class="ico"><use href="#i-tag"/></svg>Classification</label>
+            ${sel.state === 'open' ? `<select class="input sm" id="classify" title="Correct the classification if it's wrong">
+              ${state.meta.classifications.map((k) => { const tool = k.id === 'integration' ? (sel.classification?.tool ?? sel.account.platformErp) : null; return `<option value="${k.id}" ${sel.classification?.id === k.id ? 'selected' : ''}>${esc(k.label)}${tool ? ` · ${esc(tool)}` : ''}</option>`; }).join('')}
+            </select>` : `<span class="small">${esc(sel.classificationLabel)}</span>`}
             ${isSnoozed(sel) ? `<span class="chip info">Snoozed until ${new Date(sel.snoozedUntil).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })} (reply target still running)</span>` : ''}
-            ${flagsOf(sel).map((f) => `<span class="st bad"><svg class="ico"><use href="#i-alert"/></svg>${esc(f)}</span>`).join('')}
           </div>
           ${aiCard(sel)}
           ${conversationBlock(sel)}` : '<div class="empty">Select a conversation.</div>'}
@@ -689,12 +690,13 @@ async function renderInbox(selectedId) {
     await api(`/api/conversations/${sel.id}/${path}`, { method: 'POST', body });
     route({ keepScroll: true });
   });
+  $('#classify')?.addEventListener('change', (e) => act(e.target, 'classify', { id: e.target.value }));
   $('#assignee')?.addEventListener('change', (e) => act(e.target, 'assign', { assignee: e.target.value || null }));
   $('#take')?.addEventListener('click', (e) => act(e.currentTarget, 'assign', { assignee: me.name }, 'Assigned to you'));
   $('#snooze')?.addEventListener('change', (e) => e.target.value && act(e.target, 'snooze', { until: e.target.value }, 'Snoozed. It comes back when the time is up or the customer replies.'));
   $('#unsnooze')?.addEventListener('click', (e) => act(e.currentTarget, 'snooze', { until: null }));
   $('#escalate')?.addEventListener('click', async (e) => { const btn = e.currentTarget; if (await confirmEscalate()) act(btn, 'escalate'); });
-  $('#close')?.addEventListener('click', (e) => { const btn = e.currentTarget; pickCloseReason(sel.ai?.category, (reason) => act(btn, 'close', { reason }, `Closed as “${reasonLabel(reason)}”`)); });
+  $('#close')?.addEventListener('click', (e) => { const btn = e.currentTarget; pickCloseReason(sel.suggestedCloseReason, (reason) => act(btn, 'close', { reason }, `Closed as “${reasonLabel(reason)}”`)); });
   $('#ai-run')?.addEventListener('click', (e) => act(e.currentTarget, 'ai'));
   $('#ai-use')?.addEventListener('click', () => {
     const ta = $('form.reply textarea');

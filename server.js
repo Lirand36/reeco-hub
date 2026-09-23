@@ -15,6 +15,7 @@ import * as claude from './src/connectors/claude.js';
 import { CLOSE_REASONS, CONFIG, DEAL_STAGES, ONBOARDING_STEPS, PEOPLE, USERS, db, reset } from './src/store.js';
 import * as svc from './src/services.js';
 import { goodMorning } from './src/home.js';
+import { CLASSIFICATIONS, classificationLabel, suggestedCloseReason } from './src/classify.js';
 import { withActivity, announce, getActivities, clearActivities, setActor } from './src/activity.js';
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -68,7 +69,7 @@ function actorOf(req) {
 
 const summary = (a) => ({
   id: a.id, name: a.name, domain: a.domain, status: a.status, segment: a.segment, properties: a.properties,
-  region: a.region, owner: a.owner, csm: a.csm, health: a.health,
+  region: a.region, owner: a.owner, csm: a.csm, health: a.health, platformErp: a.platform?.erp ?? null,
   deal: a.deal, usage: a.usage,
   onboarding: a.onboarding && {
     done: ONBOARDING_STEPS.filter((s) => a.onboarding.steps[s.id].done).length,
@@ -90,7 +91,7 @@ const integrations = () => [
 
 const routes = [
   ['GET', /^\/api\/meta$/, () => ({
-    stages: DEAL_STAGES, users: USERS, people: PEOPLE, config: CONFIG, integrations: integrations(), closeReasons: CLOSE_REASONS,
+    stages: DEAL_STAGES, users: USERS, people: PEOPLE, classifications: CLASSIFICATIONS, config: CONFIG, integrations: integrations(), closeReasons: CLOSE_REASONS,
     steps: ONBOARDING_STEPS.map(({ id, label, auto, hint }) => ({ id, label, auto: Boolean(auto), hint })),
   })],
   ['GET', /^\/api\/home$/, (req) => goodMorning(actorOf(req))],
@@ -101,7 +102,7 @@ const routes = [
     return { ...a, approvals: db.approvals.filter((p) => p.accountId === id) };
   }],
   ['GET', /^\/api\/inbox$/, () =>
-    db.accounts.flatMap((a) => a.conversations.map((c) => ({ ...c, account: summary(a) })))
+    db.accounts.flatMap((a) => a.conversations.map((c) => ({ ...c, account: summary(a), classificationLabel: classificationLabel(c.classification), suggestedCloseReason: c.ai?.category ?? suggestedCloseReason(c.classification) })))
       .sort((x, y) => (y.state === 'open') - (x.state === 'open') || y.updatedAt.localeCompare(x.updatedAt))],
   ['GET', /^\/api\/approvals$/, () => db.approvals.map((p) => ({ ...p, account: summary(db.accounts.find((a) => a.id === p.accountId)) }))],
   ['GET', /^\/api\/log$/, () => getLog()],
@@ -135,6 +136,7 @@ const routes = [
   ['POST', /^\/api\/conversations\/([\w-]+)\/close$/, (req, [id], b) => svc.close(id, b.reason, actorOf(req).name)],
   ['POST', /^\/api\/conversations\/([\w-]+)\/assign$/, (req, [id], b) => svc.assign(id, b.assignee ?? null, actorOf(req).name)],
   ['POST', /^\/api\/conversations\/([\w-]+)\/snooze$/, (req, [id], b) => svc.snooze(id, b.until ?? null, actorOf(req).name)],
+  ['POST', /^\/api\/conversations\/([\w-]+)\/classify$/, (req, [id], b) => svc.reclassify(id, b.id, b.tool, actorOf(req).name)],
   ['POST', /^\/api\/conversations\/([\w-]+)\/ai$/, (req, [id]) => svc.aiAssist(id, actorOf(req).name)],
   ['POST', /^\/api\/conversations\/([\w-]+)\/escalate$/, (req, [id]) => svc.escalate(id, actorOf(req).name)],
   ['POST', /^\/api\/approvals\/([\w-]+)$/, (req, [id], b) => {

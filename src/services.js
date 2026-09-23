@@ -9,6 +9,7 @@ import * as snowflake from './connectors/snowflake.js';
 import * as claude from './connectors/claude.js';
 import { bus } from './bus.js';
 import { announce, withActivity } from './activity.js';
+import { CLASSIFICATIONS, classify, classificationLabel, fromCloseReason } from './classify.js';
 import { CLOSE_REASONS, CONFIG, DEAL_STAGES, ONBOARDING_STEPS, PEOPLE, USERS, db, findAccount, findAccountByEmail, findConversation } from './store.js';
 
 export class HttpError extends Error {
@@ -255,6 +256,17 @@ export async function assign(conversationId, assigneeName, actor, { quiet = fals
   return { conversation: c };
 }
 
+export async function reclassify(conversationId, id, tool, actor) {
+  const { account: a, conversation: c } = getConversation(conversationId);
+  need(CLASSIFICATIONS.some((x) => x.id === id), 400, 'Unknown classification');
+  c.classification = { id, tool: id === 'integration' ? (tool || a.platform?.erp || null) : null };
+  c.classifiedBy = 'agent';
+  await track('conversation.classified', a.id, actor, { conversationId: c.id, classification: c.classification });
+  announce(`${first(customerOf(c))}'s conversation is now classified as ${classificationLabel(c.classification)}.`, { icon: '🏷', tone: 'info', accountId: a.id });
+  changed(a.id);
+  return { conversation: c };
+}
+
 export async function snooze(conversationId, until, actor) {
   const { account: a, conversation: c } = getConversation(conversationId);
   if (!until) {
@@ -341,6 +353,7 @@ export async function aiAssist(conversationId, actor) {
     mock: () => heuristicAssist(a, c, actor),
   });
   c.ai = { ...out, forMessages: c.messages.length, at: now() };
+  if (c.classifiedBy !== 'agent') c.classification = fromCloseReason(out.category, a) ?? c.classification;
   await track('ai.assist', a.id, actor, { conversationId: c.id, mode: out.mode });
   announce(`Summary and a draft reply are ready for ${first(customerOf(c))}'s conversation.`, { icon: '✨', accountId: a.id });
   changed(a.id);
@@ -413,6 +426,7 @@ export async function ingestIntercom(payload) {
   c.messages.push({ from: 'customer', author: a.contact.name, text, at: now() });
   c.updatedAt = now();
   c.slaDueAt = new Date(Date.now() + (CONFIG.slaHours[a.segment] ?? 4) * 3600_000).toISOString();
+  if (c.classifiedBy !== 'agent') c.classification = classify(`${c.subject}. ${c.messages.filter((m) => m.from === 'customer').map((m) => m.text).join(' ')}`, a);
 
   const reasons = [];
   if (a.segment === 'Enterprise') reasons.push('Enterprise account');
@@ -424,8 +438,8 @@ export async function ingestIntercom(payload) {
   await track('conversation.inbound', a.id, 'intercom', { conversationId: c.id, flagged: reasons });
   const who = `${first(a.contact.name)} at ${a.name}`;
   announce(reasons.length
-    ? `New message from ${who}. Flagged as ${reasons.join(' and ').toLowerCase()}, and ${PEOPLE.vpSupport.name} (${PEOPLE.vpSupport.title}) was notified.`
-    : `New message from ${who}.`, { icon: reasons.length ? '⚠' : '✉', tone: reasons.length ? 'warn' : 'info', accountId: a.id });
+    ? `New message from ${who} (${classificationLabel(c.classification)}). Flagged for attention, and ${PEOPLE.vpSupport.name} (${PEOPLE.vpSupport.title}) was notified.`
+    : `New message from ${who} (${classificationLabel(c.classification)}).`, { icon: reasons.length ? '⚠' : '✉', tone: reasons.length ? 'warn' : 'info', accountId: a.id });
   bus.emit('inbound', { accountId: a.id, accountName: a.name, conversation: c, flagged: reasons });
   changed(a.id);
   return { ok: true, conversationId: c.id, flagged: reasons };

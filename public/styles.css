@@ -506,6 +506,17 @@ th.num-col .th-sort { flex-direction: row-reverse; }
 .ctx { align-items: center; }
 .reply .btn { align-self: stretch; }
 
+/* card facts: one labelled line each */
+.ii-facts { display: flex; flex-direction: column; gap: 3px; margin-top: 8px; font-size: 12.5px; }
+.fact { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--text); }
+.fact .ico { width: 14px; height: 14px; color: var(--muted); }
+.fact .k { color: var(--muted); }
+.fact.bad, .fact.bad .ico { color: var(--bad); font-weight: 500; }
+.fact.warn, .fact.warn .ico { color: var(--warn); font-weight: 500; }
+.fact.info, .fact.info .ico { color: var(--info); }
+.fact.calm { color: var(--muted); }
+.info-text { color: var(--info); }
+
 /* ---------- responsive ---------- */
 @media (max-width: 1080px) {
   .detail-grid, .inbox { grid-template-columns: minmax(0, 1fr); }

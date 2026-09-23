@@ -2,6 +2,8 @@
 // In production this becomes a DB kept in sync with HubSpot / Jira / Intercom / Snowflake;
 // the IDs below mirror each system's own IDs.
 
+import { classify } from './classify.js';
+
 export const CONFIG = {
   discountApprovalThreshold: 15, // % above which a manager must approve
   slaHours: { Enterprise: 1, 'Mid-market': 4, Independent: 4 },
@@ -179,6 +181,11 @@ export const db = { accounts: [], approvals: [] };
 
 export function reset() {
   db.accounts = seedAccounts();
+  for (const a of db.accounts) {
+    for (const c of a.conversations) {
+      c.classification = classify(c.messages.filter((m) => m.from === 'customer').map((m) => `${c.subject}. ${m.text}`).join(' '), a);
+    }
+  }
   db.approvals = seedApprovals();
 }
 reset();
