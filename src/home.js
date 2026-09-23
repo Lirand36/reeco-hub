@@ -39,7 +39,7 @@ function support(user) {
       title: c.assignee ? `Reply to ${last.author} at ${a.name}` : `Unassigned: ${last.author} at ${a.name}`,
       detail: c.ai && c.ai.forMessages === c.messages.length ? `✨ ${c.ai.summary}` : `“${last.text.length > 120 ? last.text.slice(0, 117) + '…' : last.text}”`,
       tags: [
-        m == null ? null : m < 0 ? { text: `SLA breached ${fmtMins(-m)} ago`, tone: 'bad' } : { text: `SLA in ${fmtMins(m)}`, tone: m <= 30 ? 'warn' : '' },
+        m == null ? null : m < 0 ? { text: `Reply overdue ${fmtMins(-m)}`, tone: 'bad' } : { text: `Reply due in ${fmtMins(m)}`, tone: m <= 30 ? 'warn' : '' },
         a.segment === 'Enterprise' ? { text: 'Enterprise', tone: 'brand' } : null,
         ...(c.flagged ?? []).filter((f) => f !== 'Enterprise account').map((f) => ({ text: f, tone: 'bad' })),
         c.escalatedTo ? { text: c.escalatedTo, tone: 'info' } : null,
@@ -65,7 +65,7 @@ function support(user) {
   if (mine.length) parts.push(`${plural(mine.length, 'customer')} waiting on you`);
   if (unassigned.length) parts.push(`${unassigned.length} unassigned in the queue`);
   const summary = parts.length
-    ? `${parts.join(', ')}${breached.length ? `. ${breached.length} already past SLA` : ''}.`
+    ? `${parts.join(', ')}${breached.length ? `. ${breached.length} already overdue` : ''}.`
     : 'Inbox zero. Nobody is waiting on you.';
 
   return {
@@ -73,7 +73,7 @@ function support(user) {
     kpis: [
       { label: 'Waiting on you', value: mine.length },
       { label: 'Unassigned', value: unassigned.length, tone: unassigned.length ? 'warn' : '' },
-      { label: 'SLA breached (team)', value: breached.length, tone: breached.length ? 'bad' : '' },
+      { label: 'Overdue replies (team)', value: breached.length, tone: breached.length ? 'bad' : '' },
       { label: 'Yours with engineering', value: escalated.length },
     ],
     actions,

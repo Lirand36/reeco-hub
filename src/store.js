@@ -1,4 +1,4 @@
-// In-memory data for the concept demo. All companies and people are fictional.
+// In-memory demo data. All companies and people are fictional.
 // In production this becomes a DB kept in sync with HubSpot / Jira / Intercom / Snowflake;
 // the IDs below mirror each system's own IDs.
 

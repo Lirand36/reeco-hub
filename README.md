@@ -1,6 +1,6 @@
-# Reeco Hub (concept)
+# Reeco Hub
 
-> A concept prototype, **not an official Reeco product**. All companies, people and numbers in the demo are fictional.
+> All companies, people and numbers in the demo data are fictional.
 
 Reeco Hub is one internal workspace for Reeco's Sales, Support and Customer Success teams. Reps work in a single UI built around Reeco's world (hotel groups, properties, purchase orders, AI-processed invoices). Behind it, the hub works through the tools Reeco already runs, so nobody has to switch between them:
 
@@ -26,16 +26,16 @@ Everything runs in **mock mode** by default: each request is built exactly as th
 ## Deploy to Render (shareable link)
 
 1. Render dashboard → **New** → **Blueprint** → select this repo (it uses `render.yaml`).
-2. Set `PUBLIC_URL` to the service URL once Render assigns it, e.g. `https://reeco-hub-concept.onrender.com`.
+2. Set `PUBLIC_URL` to the service URL once Render assigns it, e.g. `https://reeco-hub.onrender.com`.
 3. Share the link. Demo data lives in memory: it resets on restart, and anyone can reset it from **Connections → Reset demo data**.
 
 On Render's free plan the service sleeps after about 15 minutes idle, and the first visit after that takes around 30 seconds to wake it.
 
 ## Demo script (6 minutes)
 
-The **▶ Demo guide** button in the app has the same steps with links.
+The same steps, with links, are in the app under the user menu (bottom-left) → **Demo guide**, or press **?**.
 
-0. **Good morning.** Everyone lands on a role-specific dashboard: a short summary, four KPIs, and a ranked list of next best actions, each with a call to action. Many actions complete in one click (approve a discount, escalate a conversation, mark an onboarding step done, sync usage). Use **View as** to switch between Account Executive, Sales Manager, Support and Customer Success.
+0. **Good morning.** Everyone lands on a role-specific dashboard: a short summary, four KPIs, and a ranked list of next best actions, each with a call to action. Many actions complete in one click (approve a discount, escalate a conversation, mark an onboarding step done, sync usage). Switch between Account Executive, Sales Manager, Support and Customer Success from the user menu at the bottom-left.
 1. **Close a deal.** Open *Harborline Hotel Group* → click **Closed won**. One click updates HubSpot, announces in `#deals`, creates `#onb-harborline` with the checklist, opens a Jira onboarding epic and logs to Snowflake.
 2. **Deal desk.** *Northgate Inns* → **Request discount** 20% (the approval threshold is 15%). The request goes to `#deal-desk` with Approve/Reject buttons. Approve it from **Approvals**, either as *Eitan B. (Sales Manager)* or with **Simulate Slack click**.
 3. **Support.** Sign in as *Ron A. (Support)* and open **Inbox**.
@@ -46,6 +46,13 @@ The **▶ Demo guide** button in the app has the same steps with links.
    - **Simulate inbound** (Enterprise, angry) is auto-flagged to `#support-escalations`; **Escalate** opens a Jira bug with an Intercom internal note and a Slack alert. SLA countdowns are 1h for Enterprise and 4h for everyone else, and a breach alerts Slack once.
 4. **Onboarding.** **Onboarding** → **Sync all from Snowflake**. Usage-based steps (vendors connected, first PO, first AI invoice) tick themselves off; the CSM ticks manual steps. When all six are done, go-live is announced.
 5. **Under the hood.** The **Activity log** tells the story of every action in plain words (for example "Ticket SUP-2311 escalated to engineering, and Moshe L. (VP Support) was notified"). Open a row to see each step, and "Technical details" for the exact request and response.
+
+## Working in the hub
+
+- **Search:** `Ctrl K` / `⌘K` or `/` jumps to any account, open conversation or page.
+- **Keyboard:** `G` then `H` / `P` / `I` / `O` / `A` / `L` to switch pages, `J` / `K` to move through the inbox, `?` for all shortcuts.
+- **User menu** (bottom-left): switch demo user, light / dark / system theme, demo guide, reset demo data.
+- Irreversible actions (mark a deal lost, reset data) ask for confirmation; hovering a notification keeps it open.
 
 ## Rules (in `src/store.js → CONFIG`)
 
@@ -74,7 +81,7 @@ activity.js ── groups each user action's calls and writes the one plain-lang
 
 To add a system (e.g. NetSuite, Sage Intacct, Gong), add a file in `src/connectors/` and call it from `services.js`.
 
-## From concept to production
+## From prototype to production
 
 - **Live reads and sync.** Seed data lives in `src/store.js`. Production would back it with Postgres, kept current by HubSpot, Jira and Intercom webhooks plus scheduled Snowflake pulls.
 - **Auth.** Google or Okta SSO with roles (Sales, Support, CS, Manager). Today the user is picked from a dropdown.

@@ -60,7 +60,7 @@ function verifyIntercom(req, raw) {
   if (!safeEqual(expected, String(req.headers['x-hub-signature'] || ''))) throw new svc.HttpError(401, 'Bad Intercom signature');
 }
 
-// Concept auth: the UI sends the selected demo user. Replace with SSO (Google / Okta) in production.
+// Demo auth: the UI sends the selected demo user. Replace with SSO (Google / Okta) in production.
 function actorOf(req) {
   const id = String(req.headers['x-user'] || '');
   return USERS.find((u) => u.id === id) ?? USERS[0];
@@ -228,6 +228,6 @@ const server = http.createServer(async (req, res) => {
 setInterval(() => svc.checkSla().catch((e) => console.error('SLA check failed', e)), 30_000);
 
 server.listen(PORT, () => {
-  console.log(`Reeco Hub (concept) → http://localhost:${PORT}`);
+  console.log(`Reeco Hub → http://localhost:${PORT}`);
   console.log(integrations().map((i) => `${i.name}: ${i.live ? 'live' : 'mock'}`).join(' · '));
 });

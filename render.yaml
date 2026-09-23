@@ -1,7 +1,7 @@
 # One-click deploy: Render dashboard → New → Blueprint → pick this repo.
 services:
   - type: web
-    name: reeco-hub-concept
+    name: reeco-hub
     runtime: node
     plan: free
     buildCommand: npm ci --omit=dev
@@ -10,6 +10,6 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
-      # Used in Slack messages for "Open in Reeco Hub" links, e.g. https://reeco-hub-concept.onrender.com
+      # Used in Slack messages for "Open in Reeco Hub" links, e.g. https://reeco-hub.onrender.com
       - key: PUBLIC_URL
         sync: false

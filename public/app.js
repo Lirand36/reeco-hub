@@ -1,4 +1,4 @@
-// Reeco Hub (concept): front end. Plain JS, no build step: hash routing + template strings.
+// Reeco Hub: front end. Plain JS, no build step: hash routing + template strings.
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -20,13 +20,14 @@ const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const money = (n) => '$' + Math.round(Number(n || 0)).toLocaleString('en-US');
 const compact = (n) => Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(n || 0);
 const moneyCompact = (n) => '$' + compact(n);
-function rel(iso) {
+function relText(iso) {
   const s = (Date.now() - new Date(iso)) / 1000;
   if (s < 60) return 'just now';
   if (s < 3600) return `${Math.round(s / 60)}m ago`;
   if (s < 86400) return `${Math.round(s / 3600)}h ago`;
   return `${Math.round(s / 86400)}d ago`;
 }
+const rel = (iso) => `<time datetime="${esc(iso)}" title="${esc(new Date(iso).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }))}">${relText(iso)}</time>`;
 const days = (iso) => Math.max(0, Math.round((Date.now() - new Date(iso)) / 86400000));
 const stageLabel = (id) => state.meta.stages.find((s) => s.id === id)?.label ?? id;
 const src = (sys, text) => `<span class="src ${sys}">${esc(text ?? SYSTEMS[sys].name)}</span>`;
@@ -41,8 +42,8 @@ const ticketStatus = (s) => `<span class="chip ${s === 'Done' ? 'good' : s === '
 function slaChip(c) {
   if (c.state !== 'open' || !c.slaDueAt) return '';
   const mins = Math.round((new Date(c.slaDueAt) - Date.now()) / 60000);
-  if (mins < 0) return `<span class="chip bad">SLA breached ${fmtMins(-mins)}</span>`;
-  return `<span class="chip ${mins <= 30 ? 'warn' : ''}">SLA ${fmtMins(mins)}</span>`;
+  if (mins < 0) return `<span class="chip bad" title="Past the response-time target">Reply overdue ${fmtMins(-mins)}</span>`;
+  return `<span class="chip ${mins <= 30 ? 'warn' : ''}" title="Time left to reply within the target">Reply due in ${fmtMins(mins)}</span>`;
 }
 const fmtMins = (m) => (m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`);
 
@@ -60,19 +61,25 @@ async function api(path, { method = 'GET', body } = {}) {
 function toast(html, { system, error, tone, ms = 5000 } = {}) {
   const el = document.createElement('div');
   el.className = `toast ${system ?? ''} ${tone ? `t-${tone}` : ''} ${error ? 'error' : ''}`;
-  el.innerHTML = html;
+  el.setAttribute('role', error ? 'alert' : 'status');
+  el.innerHTML = `${html}<button class="t-close" aria-label="Dismiss"><svg class="ico"><use href="#i-x"/></svg></button>`;
   const box = $('#toasts');
   box.append(el);
-  while (box.children.length > 5) box.firstChild.remove();
-  setTimeout(() => el.remove(), ms);
+  while (box.children.length > 3) box.firstChild.remove();
+  let timer;
+  const arm = () => { timer = setTimeout(() => el.remove(), error ? ms * 2 : ms); };
+  el.addEventListener('mouseenter', () => clearTimeout(timer)); // hovering keeps it open to read
+  el.addEventListener('mouseleave', arm);
+  $('.t-close', el).addEventListener('click', () => el.remove());
+  arm();
 }
 
 // Runs an action with the button disabled; errors become a toast.
 async function run(btn, fn) {
-  if (btn) { btn.disabled = true; btn.classList.add('busy'); }
+  if (btn) { btn.disabled = true; btn.classList.add('busy'); btn.setAttribute('aria-busy', 'true'); }
   try { return await fn(); }
   catch (err) { toast(`<strong>Couldn't complete:</strong> ${esc(err.message)}`, { error: true }); }
-  finally { if (btn) { btn.disabled = false; btn.classList.remove('busy'); } }
+  finally { if (btn) { btn.disabled = false; btn.classList.remove('busy'); btn.removeAttribute('aria-busy'); } }
 }
 
 // ---------- live updates ----------
@@ -133,10 +140,7 @@ async function renderHome() {
         <h1>Good morning, ${esc(first)} <span aria-hidden="true">☀</span></h1>
         <p class="gm-summary">${esc(d.summary)}</p>
       </div>
-      <div class="gm-switch" role="group" aria-label="View as">
-        <span class="muted xs">View as</span>
-        ${state.meta.users.map((u) => `<button class="chip ${u.id === d.user.id ? 'sel' : ''}" data-as="${u.id}" aria-pressed="${u.id === d.user.id}">${esc(u.name.split(' ')[0])} · ${esc(u.role)}</button>`).join('')}
-      </div>
+      <span class="chip gm-role">${esc(d.user.role)}</span>
     </section>
 
     <div class="kpis">
@@ -160,10 +164,6 @@ async function renderHome() {
         </div>`).join('') || '<div class="empty">☕ Nothing needs you right now.</div>'}
     </div>`;
 
-  $$('[data-as]').forEach((b) => b.addEventListener('click', () => {
-    $('#user').value = b.dataset.as;
-    $('#user').dispatchEvent(new Event('change'));
-  }));
   $$('[data-endpoint]').forEach((b) => b.addEventListener('click', () => run(b, async () => {
     await api(b.dataset.endpoint, { method: 'POST', body: b.dataset.body ? JSON.parse(b.dataset.body) : undefined });
     route({ keepScroll: true });
@@ -206,34 +206,62 @@ async function renderPipeline() {
 }
 
 // ---------- accounts ----------
+const ACCOUNT_COLS = [
+  { id: 'name', label: 'Account', val: (a) => a.name.toLowerCase() },
+  { id: 'status', label: 'Status', val: (a) => ['Live', 'Onboarding', 'Prospect'].indexOf(a.status) },
+  { id: 'segment', label: 'Segment', val: (a) => a.segment, sm: true },
+  { id: 'properties', label: 'Properties', val: (a) => a.properties, sm: true, num: true },
+  { id: 'arr', label: 'ARR', val: (a) => a.deal.amount, sm: true, num: true },
+  { id: 'spend', label: 'Spend via Reeco (30d)', val: (a) => a.usage?.spend30d ?? -1, sm: true, num: true },
+  { id: 'health', label: 'Health', val: (a) => a.health ?? -1, num: true },
+  { id: 'open', label: 'Open', val: (a) => a.openConversations + a.openTickets, sm: true, num: true },
+];
+
 async function renderAccounts() {
   const list = await api('/api/accounts');
+  state.acctSort ??= { id: 'health', dir: 1 };
+  const col = ACCOUNT_COLS.find((c) => c.id === state.acctSort.id);
+  list.sort((x, y) => (col.val(x) > col.val(y) ? 1 : col.val(x) < col.val(y) ? -1 : 0) * state.acctSort.dir);
+
   view.innerHTML = `
     <div class="page-head">
       <div><h1>Accounts</h1><p class="muted">Hotel groups: CRM, product usage from Snowflake, and open work, in one row.</p></div>
-      <input class="input" id="q" placeholder="Search accounts…" style="max-width:260px" />
+      <input class="input" id="q" type="search" placeholder="Filter accounts…" aria-label="Filter accounts" style="max-width:260px" value="${esc(state.acctQ ?? '')}" />
     </div>
     <div class="card table-wrap">
       <table class="table">
-        <thead><tr><th>Account</th><th>Status</th><th class="hide-sm">Segment</th><th class="hide-sm">Properties</th><th class="hide-sm">ARR</th><th class="hide-sm">Spend via Reeco (30d)</th><th>Health</th><th class="hide-sm">Open</th></tr></thead>
+        <thead><tr>${ACCOUNT_COLS.map((c) => {
+          const on = c.id === state.acctSort.id;
+          return `<th class="${c.sm ? 'hide-sm' : ''} ${c.num ? 'num-col' : ''}" aria-sort="${on ? (state.acctSort.dir === 1 ? 'ascending' : 'descending') : 'none'}"><button class="th-sort" data-sort="${c.id}">${esc(c.label)}<span class="sort-ind" aria-hidden="true">${on ? (state.acctSort.dir === 1 ? '▲' : '▼') : ''}</span></button></th>`;
+        }).join('')}</tr></thead>
         <tbody>${list.map((a) => `
           <tr data-href="#/accounts/${a.id}" data-q="${esc(`${a.name} ${a.domain} ${a.segment} ${a.status}`.toLowerCase())}">
-            <td><div style="font-weight:600">${esc(a.name)}</div><div class="muted xs">${esc(a.domain)}</div></td>
+            <td><a class="row-link" href="#/accounts/${a.id}">${esc(a.name)}</a><div class="muted xs">${esc(a.domain)}</div></td>
             <td>${statusChip(a.status)}</td>
             <td class="hide-sm small">${esc(a.segment)}</td>
-            <td class="hide-sm small num">${a.usage ? `${a.usage.propertiesLive}/` : ''}${a.properties}</td>
-            <td class="hide-sm num">${money(a.deal.amount)}</td>
-            <td class="hide-sm num">${a.usage ? moneyCompact(a.usage.spend30d) : '<span class="muted">n/a</span>'}</td>
+            <td class="hide-sm small num num-col">${a.usage ? `${a.usage.propertiesLive}/` : ''}${a.properties}</td>
+            <td class="hide-sm num num-col">${money(a.deal.amount)}</td>
+            <td class="hide-sm num num-col">${a.usage ? moneyCompact(a.usage.spend30d) : '<span class="muted">–</span>'}</td>
             <td>${healthBar(a.health)}</td>
-            <td class="hide-sm small">${a.openConversations} convos · ${a.openTickets} tickets</td>
+            <td class="hide-sm small num-col">${a.openConversations + a.openTickets ? `${a.openConversations} conv · ${a.openTickets} tickets` : '<span class="muted">–</span>'}</td>
           </tr>`).join('')}</tbody>
       </table>
+      <div class="empty" id="no-match" hidden>No accounts match your filter.</div>
     </div>`;
-  $$('tbody tr').forEach((tr) => tr.addEventListener('click', () => (location.hash = tr.dataset.href)));
-  $('#q').addEventListener('input', (e) => {
-    const q = e.target.value.trim().toLowerCase();
-    $$('tbody tr').forEach((tr) => (tr.hidden = q && !tr.dataset.q.includes(q)));
-  });
+  $$('tbody tr').forEach((tr) => tr.addEventListener('click', (e) => { if (!e.target.closest('a')) location.hash = tr.dataset.href; }));
+  $$('[data-sort]').forEach((b) => b.addEventListener('click', () => {
+    const same = state.acctSort.id === b.dataset.sort;
+    state.acctSort = { id: b.dataset.sort, dir: same ? -state.acctSort.dir : 1 };
+    renderAccounts();
+  }));
+  const filter = () => {
+    const q = (state.acctQ = $('#q').value.trim().toLowerCase());
+    let n = 0;
+    $$('tbody tr').forEach((tr) => { tr.hidden = Boolean(q) && !tr.dataset.q.includes(q); n += tr.hidden ? 0 : 1; });
+    $('#no-match').hidden = n > 0;
+  };
+  $('#q').addEventListener('input', filter);
+  filter();
 }
 
 function conversationBlock(c) {
@@ -292,7 +320,7 @@ async function renderAccount(id, query = new URLSearchParams()) {
   const net = a.deal.amount * (1 - (a.deal.discountPct || 0) / 100);
 
   view.innerHTML = `
-    <a class="back" href="#/accounts">← Accounts</a>
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="#/accounts">Accounts</a><span aria-hidden="true">/</span><span aria-current="page">${esc(a.name)}</span></nav>
     <div class="page-head">
       <div>
         <h1>${esc(a.name)}</h1>
@@ -412,6 +440,11 @@ async function renderAccount(id, query = new URLSearchParams()) {
   $$('.stage').forEach((b) => b.addEventListener('click', () => {
     if (b.classList.contains('current')) return;
     const won = b.dataset.stage === 'closedwon';
+    if (b.dataset.stage === 'closedlost') {
+      confirmDialog({ title: `Mark ${a.name} as lost?`, body: '<p class="muted">The deal moves to Closed lost in HubSpot. You can move it back later.</p>', confirmLabel: 'Mark as lost', danger: true })
+        .then((ok) => ok && run(b, async () => { await api(`/api/accounts/${id}/deal-stage`, { method: 'POST', body: { stage: 'closedlost' } }); route({ keepScroll: true }); }));
+      return;
+    }
     const go = () => run(b, async () => {
       await api(`/api/accounts/${id}/deal-stage`, { method: 'POST', body: { stage: b.dataset.stage } });
       route({ keepScroll: true });
@@ -567,10 +600,7 @@ async function renderInbox(selectedId) {
   view.innerHTML = `
     <div class="page-head">
       <div><h1>Inbox</h1><p class="muted">Intercom conversations with the customer's account and platform status alongside. Enterprise and angry messages are flagged to Slack.</p></div>
-      <div class="row">
-        <select class="input" id="sample" style="width:auto" aria-label="Inbound scenario">${INBOUND_SAMPLES.map((x, i) => `<option value="${i}">${esc(x.label)}</option>`).join('')}</select>
-        <button class="btn" id="simulate">⚡ Simulate inbound</button>
-      </div>
+      <button class="btn" id="simulate" title="Demo: pretend a customer just wrote in through Intercom">⚡ Simulate a message</button>
     </div>
     <div class="tabs" role="tablist" aria-label="Queues">
       ${INBOX_TABS.map((t) => { const n = items.filter((c) => t.test(c, me.name)).length; return `<button role="tab" class="tab ${t.id === tab.id ? 'sel' : ''}" data-tab="${t.id}" aria-selected="${t.id === tab.id}">${esc(t.label)} <span class="num">${n}</span></button>`; }).join('')}
@@ -618,7 +648,7 @@ async function renderInbox(selectedId) {
           </div>` : ''}
           <div class="ctx">
             ${slaChip(sel)}
-            ${isSnoozed(sel) ? `<span class="chip info">Snoozed until ${new Date(sel.snoozedUntil).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })} (SLA still running)</span>` : ''}
+            ${isSnoozed(sel) ? `<span class="chip info">Snoozed until ${new Date(sel.snoozedUntil).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })} (reply target still running)</span>` : ''}
             ${(sel.flagged ?? []).map((f) => `<span class="chip bad">${esc(f)}</span>`).join('')}
           </div>
           ${aiCard(sel)}
@@ -650,19 +680,24 @@ async function renderInbox(selectedId) {
     ta.style.height = `${Math.min(ta.scrollHeight + 4, 260)}px`;
   });
 
-  $('#simulate').addEventListener('click', (e) => run(e.currentTarget, async () => {
-    const x = INBOUND_SAMPLES[$('#sample').value];
-    // Same shape as Intercom's conversation.user.created webhook
-    const res = await fetch('/webhooks/intercom', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'notification_event', topic: 'conversation.user.created', data: { item: { type: 'conversation', id: String(215470000 + Math.floor(Math.random() * 99999)), source: { body: `<p>${x.text}</p>`, author: { type: 'user', email: x.email } } } } }),
-    });
-    const r = await res.json();
-    if (!res.ok) throw new Error(r.error);
-    state.inboxTab = 'unassigned';
-    location.hash = `#/inbox/${r.conversationId}`;
-  }));
+  $('#simulate').addEventListener('click', () => openModal(`
+    <h2>Simulate a customer message</h2>
+    <p class="muted small" style="margin-bottom:10px">Sends the hub the same notification Intercom sends when a customer writes in.</p>
+    <div class="reasons">${INBOUND_SAMPLES.map((x, i) => `<label class="reason"><input type="radio" name="sample" value="${i}" ${i ? '' : 'checked'} required /><span>${esc(x.label)}<span class="muted xs" style="display:block">“${esc(x.text)}”</span></span></label>`).join('')}</div>`,
+    'Send message', (data) => simulateInbound(INBOUND_SAMPLES[data.sample])));
+}
+
+// Sends the hub exactly what Intercom sends (conversation.user.created) when a customer writes in.
+async function simulateInbound(x) {
+  const res = await fetch('/webhooks/intercom', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'notification_event', topic: 'conversation.user.created', data: { item: { type: 'conversation', id: String(215470000 + Math.floor(Math.random() * 99999)), source: { body: `<p>${x.text}</p>`, author: { type: 'user', email: x.email } } } } }),
+  });
+  const r = await res.json();
+  if (!res.ok) throw new Error(r.error);
+  state.inboxTab = 'unassigned';
+  location.hash = `#/inbox/${r.conversationId}`;
 }
 
 // ---------- onboarding ----------
@@ -817,9 +852,11 @@ function renderConnections() {
       <pre class="code">POST ${esc(origin)}/webhooks/intercom   # Intercom: conversation.user.created, conversation.user.replied
 POST ${esc(origin)}/webhooks/slack      # Slack app → Interactivity request URL (approval buttons)</pre>
     </div>`;
-  $('#reset').addEventListener('click', (e) => run(e.currentTarget, async () => {
-    await api('/api/reset', { method: 'POST' });
-  }));
+  $('#reset').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    if (!(await confirmDialog({ title: 'Reset demo data?', body: '<p class="muted">Every account, conversation and approval goes back to the starting point for everyone using this link.</p>', confirmLabel: 'Reset', danger: true }))) return;
+    run(btn, () => api('/api/reset', { method: 'POST' }));
+  });
 }
 
 // ---------- modal ----------
@@ -842,23 +879,188 @@ function openTour() {
   openModal(`<h2>Demo guide · 6 minutes</h2>
     <ol class="tour">
       <li><b>Good morning.</b> <a class="link" href="#/home">Start here</a>: each role lands on its own to-do list with one-click actions. Use <i>View as</i> to switch roles.</li>
-      <li><b>Sales: close a deal.</b> Pipeline → <a class="link" href="#/accounts/harborline">Harborline</a> → click <i>Closed won</i>. Watch HubSpot, Slack, Jira and Snowflake fire in the corner.</li>
+      <li><b>Sales: close a deal.</b> <a class="link" href="#/accounts/harborline">Harborline</a> → <i>Closed won</i>. One click updates HubSpot, tells the team in Slack, opens a Jira epic and starts onboarding.</li>
       <li><b>Deal desk.</b> <a class="link" href="#/accounts/northgate">Northgate</a> → <i>Request discount</i> 20%. Then <a class="link" href="#/approvals">Approvals</a> → <i>Simulate Slack click</i>.</li>
-      <li><b>Support.</b> As Ron, open the <a class="link" href="#/inbox">Inbox</a>: <i>Mine</i> / <i>Unassigned</i> queues, and the <i>Account snapshot</i> on the right (platform, ERP sync, tickets, history). Click <i>✨ Summarize &amp; draft reply</i>, use the draft, then <i>Close</i> and pick a reason. The <i>Closed</i> tab shows why customers contact support.</li>
-      <li><b>Onboarding.</b> <a class="link" href="#/onboarding">Onboarding</a> → <i>Sync all from Snowflake</i>. Usage-based steps tick themselves off, and a go-live gets announced.</li>
-      <li><b>Under the hood.</b> The <a class="link" href="#/log">Activity log</a> tells the story of every action in plain words, with the exact API calls one click away.</li>
+      <li><b>Support.</b> As Ron, open the <a class="link" href="#/inbox">Inbox</a>: queues, the <i>Account snapshot</i>, <i>✨ Summarize &amp; draft reply</i>, then <i>Close</i> with a reason.</li>
+      <li><b>Onboarding.</b> <a class="link" href="#/onboarding">Onboarding</a> → <i>Sync all from Snowflake</i>. Usage-based steps tick themselves off.</li>
+      <li><b>Under the hood.</b> The <a class="link" href="#/log">Activity log</a> tells the story of every action in plain words.</li>
     </ol>`, null, null);
   $$('#modal a').forEach((a) => a.addEventListener('click', () => $('#modal').close()));
 }
 
+// Promise-based confirmation for irreversible or high-impact actions.
+function confirmDialog({ title, body = '', confirmLabel = 'Confirm', danger = false }) {
+  return new Promise((resolve) => {
+    const dlg = $('#modal');
+    dlg.innerHTML = `<form method="dialog"><h2>${esc(title)}</h2>${body}
+      <div class="dialog-actions"><button class="btn ${danger ? 'danger-fill' : 'primary'}" value="ok">${esc(confirmLabel)}</button><button class="btn" value="cancel">Cancel</button></div></form>`;
+    dlg.addEventListener('close', () => resolve(dlg.returnValue === 'ok'), { once: true });
+    dlg.showModal();
+    $('button[value=ok]', dlg).focus();
+  });
+}
+
+// ---------- help & keyboard shortcuts ----------
+const SHORTCUTS = [
+  ['Ctrl K', 'Search accounts, conversations and pages'],
+  ['/', 'Search'],
+  ['G then H', 'Good morning'], ['G then P', 'Pipeline'], ['G then I', 'Inbox'], ['G then O', 'Onboarding'], ['G then A', 'Accounts'], ['G then L', 'Activity log'],
+  ['J / K', 'Next / previous conversation (Inbox)'],
+  ['?', 'This help'],
+];
+
+function openHelp() {
+  openModal(`<h2>Keyboard shortcuts</h2>
+    <dl class="shortcuts">${SHORTCUTS.map(([k, d]) => `<dt>${k.split(' ').map((x) => (x === 'then' || x === '/' && k.length > 1 ? `<span class="muted xs">${x}</span>` : `<kbd>${esc(x)}</kbd>`)).join(' ')}</dt><dd>${esc(d)}</dd>`).join('')}</dl>
+    <button class="btn sm" type="button" id="help-tour"><svg class="ico"><use href="#i-play"/></svg>Open the demo guide</button>`, null, null);
+  $('#help-tour').addEventListener('click', () => { $('#modal').close(); openTour(); });
+}
+
+// ---------- user menu ----------
+const initials = (name) => name.split(' ').map((p) => p[0]).join('').slice(0, 2).toUpperCase();
+
+function renderUserChip() {
+  const u = user();
+  $('#user-avatar').textContent = initials(u.name);
+  $('#user-name').textContent = u.name;
+  $('#user-role').textContent = u.role;
+}
+
+function getTheme() { try { return localStorage.getItem('reeco-hub-theme') || 'system'; } catch { return 'system'; } }
+function setTheme(t) {
+  if (t === 'system') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
+  try { localStorage.setItem('reeco-hub-theme', t); } catch {}
+}
+
+function toggleUserMenu(open) {
+  const menu = $('#user-menu');
+  const btn = $('#user-btn');
+  open ??= menu.hidden;
+  if (!open) { menu.hidden = true; btn.setAttribute('aria-expanded', 'false'); return; }
+  const me = user();
+  const theme = getTheme();
+  menu.innerHTML = `
+    <div class="menu-label">Switch user (demo)</div>
+    ${state.meta.users.map((u) => `<button role="menuitemradio" aria-checked="${u.id === me.id}" class="menu-item ${u.id === me.id ? 'sel' : ''}" data-user="${u.id}">
+      <span class="avatar sm" aria-hidden="true">${initials(u.name)}</span><span class="grow">${esc(u.name)}<span class="muted xs"> · ${esc(u.role)}</span></span></button>`).join('')}
+    <div class="menu-sep"></div>
+    <div class="menu-label">Theme</div>
+    <div class="seg" role="group" aria-label="Theme">
+      ${[['system', 'i-monitor', 'System'], ['light', 'i-sun', 'Light'], ['dark', 'i-moon', 'Dark']].map(([v, i, l]) => `<button class="${theme === v ? 'sel' : ''}" data-theme-set="${v}" aria-pressed="${theme === v}"><svg class="ico"><use href="#${i}"/></svg>${l}</button>`).join('')}
+    </div>
+    <div class="menu-sep"></div>
+    <button role="menuitem" class="menu-item" data-menu="tour"><svg class="ico"><use href="#i-play"/></svg><span class="grow">Demo guide</span></button>
+    <button role="menuitem" class="menu-item" data-menu="help"><svg class="ico"><use href="#i-help"/></svg><span class="grow">Keyboard shortcuts</span><kbd>?</kbd></button>
+    <button role="menuitem" class="menu-item" data-menu="reset"><svg class="ico"><use href="#i-reset"/></svg><span class="grow">Reset demo data</span></button>`;
+  menu.hidden = false;
+  btn.setAttribute('aria-expanded', 'true');
+  $('.menu-item', menu).focus();
+
+  $$('[data-user]', menu).forEach((b) => b.addEventListener('click', () => {
+    $('#user').value = b.dataset.user;
+    $('#user').dispatchEvent(new Event('change'));
+    toggleUserMenu(false);
+  }));
+  $$('[data-theme-set]', menu).forEach((b) => b.addEventListener('click', () => { setTheme(b.dataset.themeSet); toggleUserMenu(true); }));
+  $('[data-menu=tour]', menu).addEventListener('click', () => { toggleUserMenu(false); openTour(); });
+  $('[data-menu=help]', menu).addEventListener('click', () => { toggleUserMenu(false); openHelp(); });
+  $('[data-menu=reset]', menu).addEventListener('click', async () => {
+    toggleUserMenu(false);
+    if (await confirmDialog({ title: 'Reset demo data?', body: '<p class="muted">Every account, conversation and approval goes back to the starting point for everyone using this link.</p>', confirmLabel: 'Reset', danger: true })) {
+      await run(null, () => api('/api/reset', { method: 'POST' }));
+    }
+  });
+}
+
+// ---------- search (command palette) ----------
+const PAGES = [
+  ['Good morning', '#/home', 'i-sun'], ['Pipeline', '#/pipeline', 'i-board'], ['Approvals', '#/approvals', 'i-check'], ['Inbox', '#/inbox', 'i-inbox'],
+  ['Onboarding', '#/onboarding', 'i-flag'], ['Accounts', '#/accounts', 'i-building'], ['Activity log', '#/log', 'i-activity'], ['Connections', '#/connections', 'i-plug'],
+];
+
+async function openPalette() {
+  const dlg = $('#palette');
+  if (dlg.open) return;
+  const [accounts, convs] = await Promise.all([api('/api/accounts'), api('/api/inbox')]);
+  const items = [
+    ...PAGES.map(([label, href, icon]) => ({ group: 'Pages', label, href, icon, hint: '' })),
+    ...accounts.map((a) => ({ group: 'Accounts', label: a.name, href: `#/accounts/${a.id}`, icon: 'i-building', hint: `${a.status} · ${a.segment}`, q: `${a.domain} ${a.contact?.name ?? ''}` })),
+    ...convs.filter((c) => c.state === 'open').map((c) => ({ group: 'Open conversations', label: c.subject, href: `#/inbox/${c.id}`, icon: 'i-inbox', hint: c.account.name, q: c.messages.map((m) => m.author).join(' ') })),
+  ];
+  dlg.innerHTML = `
+    <div class="pal-input"><svg class="ico"><use href="#i-search"/></svg><input id="pal-q" placeholder="Search accounts, conversations, pages…" aria-label="Search" autocomplete="off" /><kbd>Esc</kbd></div>
+    <div class="pal-list" id="pal-list" role="listbox"></div>`;
+  let sel = 0;
+  let shown = [];
+  const draw = () => {
+    const q = $('#pal-q', dlg).value.trim().toLowerCase();
+    shown = items.filter((x) => !q || `${x.label} ${x.hint} ${x.q ?? ''}`.toLowerCase().includes(q)).slice(0, 12);
+    sel = Math.min(sel, Math.max(0, shown.length - 1));
+    let group = '';
+    $('#pal-list', dlg).innerHTML = shown.map((x, i) => {
+      const head = x.group !== group ? `<div class="pal-group">${esc((group = x.group))}</div>` : '';
+      return `${head}<a role="option" aria-selected="${i === sel}" class="pal-item ${i === sel ? 'sel' : ''}" href="${esc(x.href)}" data-i="${i}">
+        <svg class="ico"><use href="#${x.icon}"/></svg><span class="grow ellipsis">${esc(x.label)}</span><span class="muted xs">${esc(x.hint)}</span></a>`;
+    }).join('') || '<div class="empty">No matches.</div>';
+    $('.pal-item.sel', dlg)?.scrollIntoView({ block: 'nearest' });
+  };
+  const go = (x) => { if (!x) return; dlg.close(); location.hash = x.href; };
+  $('#pal-q', dlg).addEventListener('input', () => { sel = 0; draw(); });
+  $('#pal-q', dlg).addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(sel + 1, shown.length - 1); draw(); }
+    if (e.key === 'ArrowUp') { e.preventDefault(); sel = Math.max(sel - 1, 0); draw(); }
+    if (e.key === 'Enter') { e.preventDefault(); go(shown[sel]); }
+  });
+  $('#pal-list', dlg).addEventListener('click', (e) => { const a = e.target.closest('.pal-item'); if (a) { e.preventDefault(); go(shown[a.dataset.i]); } });
+  dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); }); // click outside
+  draw();
+  dlg.showModal();
+  $('#pal-q', dlg).focus();
+}
+
+// ---------- keyboard ----------
+let gPending = 0;
+function onKey(e) {
+  const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName) || document.activeElement?.isContentEditable;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openPalette(); return; }
+  if (typing || e.ctrlKey || e.metaKey || e.altKey || $('#modal').open || $('#palette').open) return;
+  if (e.key === '/') { e.preventDefault(); openPalette(); return; }
+  if (e.key === '?') { e.preventDefault(); openHelp(); return; }
+  if (e.key === 'Escape' && !$('#user-menu').hidden) { toggleUserMenu(false); $('#user-btn').focus(); return; }
+  if (e.key.toLowerCase() === 'g') { gPending = Date.now(); return; }
+  if (Date.now() - gPending < 1200) {
+    const dest = { h: '#/home', p: '#/pipeline', i: '#/inbox', o: '#/onboarding', a: '#/accounts', l: '#/log', c: '#/connections' }[e.key.toLowerCase()];
+    gPending = 0;
+    if (dest) { location.hash = dest; return; }
+  }
+  if (location.hash.startsWith('#/inbox') && (e.key === 'j' || e.key === 'k')) {
+    const items = $$('.inbox-item');
+    const idx = items.findIndex((x) => x.classList.contains('active'));
+    const next = items[Math.min(Math.max(idx + (e.key === 'j' ? 1 : -1), 0), items.length - 1)];
+    if (next) location.hash = next.getAttribute('href');
+  }
+}
+
 // ---------- router ----------
+const TITLES = { home: 'Good morning', pipeline: 'Pipeline', approvals: 'Approvals', inbox: 'Inbox', onboarding: 'Onboarding', accounts: 'Accounts', log: 'Activity log', connections: 'Connections' };
+let lastSection = null;
+
 async function route({ keepScroll = false } = {}) {
   const [path, qs = ''] = (location.hash || '#/home').split('?');
   const [, section = 'home', id] = path.split('/');
   const query = new URLSearchParams(qs);
   const nav = section === 'accounts' && id ? 'accounts' : section;
-  $$('[data-nav]').forEach((a) => a.classList.toggle('active', a.dataset.nav === nav));
+  $$('[data-nav]').forEach((a) => {
+    const on = a.dataset.nav === nav;
+    a.classList.toggle('active', on);
+    if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+  });
+  document.title = `${TITLES[section] ?? 'Reeco Hub'} · Reeco Hub`;
   const y = scrollY;
+  const navigated = !keepScroll && lastSection !== `${section}/${id ?? ''}`;
+  lastSection = `${section}/${id ?? ''}`;
+  // Show a skeleton only if loading is noticeable, so fast pages don't flicker.
+  const skel = navigated ? setTimeout(() => { view.innerHTML = SKELETON; }, 150) : null;
   try {
     if (section === 'home') await renderHome();
     else if (section === 'accounts' && id) await renderAccount(id, query);
@@ -871,24 +1073,35 @@ async function route({ keepScroll = false } = {}) {
     else if (section === 'pipeline') await renderPipeline();
     else await renderHome();
   } catch (err) {
-    view.innerHTML = `<div class="card empty">Couldn't load this page: ${esc(err.message)}</div>`;
+    view.innerHTML = `<div class="card empty-state"><h2>Couldn't load this page</h2><p class="muted">${esc(err.message)}</p><button class="btn" onclick="location.reload()">Try again</button></div>`;
+  } finally {
+    clearTimeout(skel);
   }
   if (keepScroll) scrollTo(0, y);
+  else if (navigated) { scrollTo(0, 0); view.focus({ preventScroll: true }); }
 }
+
+const SKELETON = `<div class="skel" aria-busy="true" aria-label="Loading"><div class="sk sk-title"></div><div class="sk sk-line"></div>
+  <div class="kpis">${'<div class="sk sk-card"></div>'.repeat(4)}</div><div class="sk sk-block"></div></div>`;
 
 async function init() {
   state.meta = await fetch('/api/meta').then((r) => r.json());
   const sel = $('#user');
   sel.innerHTML = state.meta.users.map((u) => `<option value="${u.id}">${esc(u.name)} · ${esc(u.role)}</option>`).join('');
   try { const saved = localStorage.getItem('reeco-hub-user'); if (saved && state.meta.users.some((u) => u.id === saved)) sel.value = saved; } catch {}
-  sel.addEventListener('change', () => { try { localStorage.setItem('reeco-hub-user', sel.value); } catch {} route({ keepScroll: true }); });
-  $('#tour-btn').addEventListener('click', openTour);
+  sel.addEventListener('change', () => { try { localStorage.setItem('reeco-hub-user', sel.value); } catch {} renderUserChip(); route({ keepScroll: true }); });
+  renderUserChip();
+  if (!/Mac|iPhone|iPad/.test(navigator.platform)) $('#kbd-k').textContent = 'Ctrl K'; else $('#kbd-k').textContent = '⌘K';
+
+  $('#user-btn').addEventListener('click', () => toggleUserMenu());
+  document.addEventListener('click', (e) => { if (!$('#user-menu').hidden && !e.target.closest('.sidebar-foot')) toggleUserMenu(false); });
+  $('#search-btn').addEventListener('click', openPalette);
+  document.addEventListener('keydown', onKey);
   addEventListener('hashchange', () => { route(); });
-  setInterval(() => { if (/^#\/(inbox|accounts\/)/.test(location.hash)) scheduleRender(); }, 60_000); // SLA countdowns
+  setInterval(() => { if (/^#\/(inbox|accounts\/)/.test(location.hash)) scheduleRender(); }, 60_000); // reply-due countdowns
   connectEvents();
   refreshBadges();
   await route();
-  try { if (!localStorage.getItem('reeco-hub-toured')) { localStorage.setItem('reeco-hub-toured', '1'); openTour(); } } catch {}
 }
 
 init();
