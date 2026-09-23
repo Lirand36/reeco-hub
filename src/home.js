@@ -3,6 +3,7 @@
 
 import { CONFIG, ONBOARDING_STEPS, db } from './store.js';
 import { classificationLabel } from './classify.js';
+import { anomalyText, computeHealth } from './health.js';
 
 const RANK = { urgent: 0, high: 1, normal: 2, info: 3 };
 const money = (n) => '$' + Math.round(n).toLocaleString('en-US');
@@ -10,7 +11,7 @@ const moneyK = (n) => (n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : `$${Math.round(n
 const minsUntil = (iso) => Math.round((new Date(iso) - Date.now()) / 60000);
 const daysSince = (iso) => Math.floor((Date.now() - new Date(iso)) / 86400000);
 const fmtMins = (m) => (m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`);
-const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const plural = (n, word, many) => `${n} ${n === 1 ? word : many ?? `${word}s`}`;
 
 const link = (label, href) => ({ label, kind: 'link', href });
 const call = (label, endpoint, body, done) => ({ label, kind: 'action', endpoint, body, done });
@@ -190,10 +191,71 @@ function manager(user) {
 // ---------------------------------------------------------------- customer success
 
 function cs(user) {
-  const onboarding = db.accounts.filter((a) => a.status === 'Onboarding' && a.csm === user.name);
-  const atRisk = db.accounts.filter((a) => a.status === 'Live' && a.health != null && a.health < 50 && a.csm === user.name);
+  const mine = db.accounts.filter((a) => a.csm === user.name && a.status !== 'Prospect');
+  const live = mine.filter((a) => a.status === 'Live');
+  const onboarding = mine.filter((a) => a.status === 'Onboarding');
+  const healthOf = (a) => computeHealth(a, db.anomalies);
   const actions = [];
 
+  // 1. Usage anomalies from Snowflake
+  for (const an of db.anomalies.filter((x) => x.status === 'new' && mine.some((a) => a.id === x.accountId))) {
+    const a = mine.find((x) => x.id === an.accountId);
+    actions.push({
+      id: `an-${an.id}`, priority: an.severity === 'bad' ? 'urgent' : 'high', icon: '📉', sort: 0,
+      title: `Usage anomaly at ${a.name}`, badge: a.segment === 'Enterprise' ? 'Enterprise' : null,
+      detail: `${anomalyText(an)}. Detected by Snowflake ${daysSince(an.detectedAt) ? `${daysSince(an.detectedAt)}d ago` : 'today'}.`,
+      tags: [{ text: 'Snowflake', tone: 'info' }],
+      cta: link('Investigate', `#/accounts/${a.id}?tab=health`),
+      secondary: call('Mark reviewed', `/api/anomalies/${an.id}/ack`, null),
+    });
+  }
+
+  // 2. Accounts at risk, highest risk first
+  for (const a of mine) {
+    const h = healthOf(a);
+    if (h.level !== 'high' && !(h.level === 'medium' && h.renewalDays != null && h.renewalDays <= 90)) continue;
+    actions.push({
+      id: `risk-${a.id}`, priority: h.level === 'high' ? 'urgent' : 'high', icon: '⚠', sort: h.score,
+      title: `${a.name}: ${h.level} risk (health ${h.score})`, badge: a.segment === 'Enterprise' ? 'Enterprise' : null,
+      detail: h.reasons.filter((r) => !r.startsWith('Usage anomaly')).slice(0, 3).join(' · '), // anomalies have their own card
+      tags: [h.renewalDays != null ? { text: `Renewal in ${h.renewalDays} days`, tone: h.renewalDays <= 90 ? 'warn' : '' } : null, { text: `${moneyK(a.deal.amount)} ARR`, tone: '' }].filter(Boolean),
+      cta: link('Open account', `#/accounts/${a.id}?tab=health`),
+      secondary: call('Start save plan', `/api/accounts/${a.id}/notes`, { text: `Save plan started by ${user.name}: exec sponsor call, weekly check-in, fix open issues before renewal.` }),
+    });
+  }
+
+  // 3. Support on my accounts: escalations and anything overdue or technical
+  for (const a of mine) {
+    for (const c of a.conversations.filter((x) => x.state === 'open')) {
+      const important = c.escalatedTo || (c.slaDueAt && minsUntil(c.slaDueAt) < 0) || ['bug', 'integration'].includes(c.classification?.id);
+      if (!important) continue;
+      actions.push({
+        id: `sup-${c.id}`, priority: c.escalatedTo ? 'high' : 'normal', icon: '🎧', sort: 2,
+        title: `Support: ${a.name}, “${c.subject}”`, badge: a.segment === 'Enterprise' ? 'Enterprise' : null,
+        detail: `${classificationLabel(c.classification)} · owner ${c.assignee ?? 'unassigned'}${c.escalatedTo ? ` · with engineering (${c.escalatedTo})` : ''}.`,
+        tags: [{ text: classificationLabel(c.classification), tone: 'info' }],
+        cta: link('View conversation', `#/inbox/${c.id}`),
+      });
+    }
+  }
+
+  // 4. Feature requests that shipped: tell the customer
+  for (const f of db.featureRequests.filter((x) => x.status === 'shipped')) {
+    for (const r of f.accounts.filter((x) => !x.notified)) {
+      const a = mine.find((x) => x.id === r.accountId);
+      if (!a) continue;
+      actions.push({
+        id: `fr-${f.id}-${a.id}`, priority: 'high', icon: '🚀', sort: 1,
+        title: `Tell ${a.name}: “${f.title}” is live`,
+        detail: `They asked for it ${daysSince(r.requestedAt) ? `${daysSince(r.requestedAt)} days ago` : 'recently'} (${f.jiraKey}). A quick note builds goodwill${a.renewalDate ? ' before renewal' : ''}.`,
+        tags: [{ text: 'Shipped', tone: 'good' }],
+        cta: call('Tell the customer', `/api/feature-requests/${f.id}/tell`, { accountId: a.id }),
+        secondary: link('Open request', `#/requests`),
+      });
+    }
+  }
+
+  // 5. Onboarding
   for (const a of onboarding) {
     const day = daysSince(a.onboarding.startedAt);
     const next = ONBOARDING_STEPS.find((s) => !s.auto && !a.onboarding.steps[s.id].done);
@@ -202,56 +264,47 @@ function cs(user) {
       actions.push({
         id: `kick-${a.id}`, priority: 'high', icon: '🚀', sort: 0,
         title: `Kick off ${a.name}`,
-        detail: `Closed ${day ? 'yesterday' : 'today'}: ${a.properties} properties. Intro yourself in ${a.onboarding.slackChannel} and book the kickoff call.`,
+        detail: `New customer: ${a.properties} properties. Introduce yourself in ${a.onboarding.slackChannel} and book the kickoff call.`,
         tags: [{ text: 'New customer', tone: 'brand' }],
         cta: link('Open onboarding', `#/accounts/${a.id}`),
       });
     }
     if (next) {
       actions.push({
-        id: `step-${a.id}-${next.id}`, priority: day > 10 ? 'high' : 'normal', icon: '☐', sort: 1,
+        id: `step-${a.id}-${next.id}`, priority: day > 10 ? 'high' : 'normal', icon: '☐', sort: 3,
         title: `${a.name}: ${next.label}`,
-        detail: `Day ${day} of onboarding · ${done}/${ONBOARDING_STEPS.length} steps · ${a.usage?.propertiesLive ?? 0}/${a.properties} properties live.`,
+        detail: `Onboarding day ${day} · ${done}/${ONBOARDING_STEPS.length} steps · ${a.usage?.propertiesLive ?? 0}/${a.properties} properties live.`,
         tags: day > 10 ? [{ text: `Day ${day}`, tone: 'warn' }] : [],
-        cta: call('Mark done', `/api/accounts/${a.id}/steps/${next.id}`, null, `${next.label} marked done. Posted to ${a.onboarding.slackChannel}`),
+        cta: call('Mark done', `/api/accounts/${a.id}/steps/${next.id}`, null),
         secondary: link('Open', `#/accounts/${a.id}`),
       });
     }
   }
 
-  const autoPending = onboarding.some((a) => ONBOARDING_STEPS.some((s) => s.auto && !a.onboarding.steps[s.id].done));
-  if (autoPending) {
-    actions.push({
-      id: 'sync', priority: 'normal', icon: '❄', sort: 2,
-      title: 'Pull fresh usage from Snowflake',
-      detail: 'Usage-based steps (vendors, first PO, first AI invoice) tick themselves off when the data shows them.',
-      tags: [],
-      cta: call('Sync now', '/api/onboarding/sync', null, 'Usage synced from Snowflake'),
-    });
-  }
+  actions.push({
+    id: 'scan', priority: 'info', icon: '❄', sort: 9,
+    title: 'Check Snowflake for usage anomalies',
+    detail: 'Compares last week with the 4 weeks before for POs, AI invoices, active users and ERP sync errors. Also runs automatically every 30 minutes.',
+    tags: [],
+    cta: call('Check now', '/api/anomalies/scan', null),
+  });
 
-  for (const a of atRisk) {
-    const open = a.conversations.filter((c) => c.state === 'open').length;
-    actions.push({
-      id: `risk-${a.id}`, priority: 'high', icon: '⚠', sort: 0,
-      title: `${a.name} health is ${a.health}`,
-      detail: `${plural(open, 'open conversation')}, ${plural(a.tickets.filter((t) => t.status !== 'Done').length, 'open ticket')}. Renewal (${moneyK(a.deal.amount)}) is with ${a.owner}. Plan a save call.`,
-      tags: [{ text: 'At risk', tone: 'bad' }, { text: a.segment, tone: 'brand' }],
-      cta: link('Open account', `#/accounts/${a.id}`),
-      secondary: call('Add save-plan note', `/api/accounts/${a.id}/notes`, { text: `Save plan started by ${user.name}: exec call + weekly check-in until health > 60.` }, 'Save plan logged to HubSpot'),
-    });
-  }
+  const scored = mine.map((a) => ({ a, h: healthOf(a) }));
+  const high = scored.filter((x) => x.h.level === 'high');
+  const arrAtRisk = scored.filter((x) => x.h.level !== 'low').reduce((s, x) => s + x.a.deal.amount, 0);
+  const openAnoms = db.anomalies.filter((x) => x.status === 'new' && mine.some((a) => a.id === x.accountId)).length;
+  const openSupport = mine.reduce((s, a) => s + a.conversations.filter((c) => c.state === 'open').length, 0);
 
   return {
-    summary: `${plural(onboarding.length, 'customer')} onboarding${atRisk.length ? `, ${atRisk.length} live ${atRisk.length === 1 ? 'account needs' : 'accounts need'} attention` : ''}.`,
+    summary: `${plural(mine.length, 'account')} in your portfolio. ${high.length ? `${plural(high.length, 'account')} at high risk` : 'None at high risk'}${openAnoms ? `, ${plural(openAnoms, 'usage anomaly', 'usage anomalies')} to review` : ''}.`,
     kpis: [
-      { label: 'Onboarding', value: onboarding.length },
-      { label: 'Avg. day', value: onboarding.length ? Math.round(onboarding.reduce((s, a) => s + daysSince(a.onboarding.startedAt), 0) / onboarding.length) : '–' },
-      { label: 'Properties live', value: `${onboarding.reduce((s, a) => s + (a.usage?.propertiesLive ?? 0), 0)}/${onboarding.reduce((s, a) => s + a.properties, 0)}` },
-      { label: 'At-risk accounts', value: atRisk.length, tone: atRisk.length ? 'bad' : '' },
+      { label: 'ARR at risk', value: moneyK(arrAtRisk), tone: arrAtRisk ? 'warn' : '' },
+      { label: 'High-risk accounts', value: high.length, tone: high.length ? 'bad' : '' },
+      { label: 'Usage anomalies', value: openAnoms, tone: openAnoms ? 'warn' : '' },
+      { label: 'Open support (your accounts)', value: openSupport },
     ],
     actions,
-    footer: link('Open onboarding', '#/onboarding'),
+    footer: link('Open my portfolio', '#/portfolio'),
   };
 }
 

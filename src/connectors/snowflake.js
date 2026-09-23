@@ -62,6 +62,21 @@ export function queryUsage(hubspotCompanyId, mockRow) {
   );
 }
 
+// Last 5 weeks of usage per account, for anomaly detection.
+export function queryWeeklyUsage(hubspotIds, mockRows) {
+  return statement(
+    'Query weekly usage',
+    `SELECT hubspot_company_id, week_start, pos, invoices_ai, active_users, sync_errors
+       FROM PRODUCT.WEEKLY_USAGE
+      WHERE hubspot_company_id IN (SELECT VALUE FROM TABLE(FLATTEN(PARSE_JSON(?))))
+        AND week_start >= DATEADD(week, -5, CURRENT_DATE())
+      ORDER BY hubspot_company_id, week_start`,
+    [JSON.stringify(hubspotIds)],
+    mockRows,
+    'Pulled the last 5 weeks of usage for your accounts'
+  );
+}
+
 export function trackEvent(event, accountId, actor, props = {}) {
   return statement(
     `Log event ${event}`,

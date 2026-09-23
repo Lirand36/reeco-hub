@@ -29,6 +29,9 @@ export function postMessage(channel, text, blocks, action = 'Post message', wher
   });
 }
 
+// Direct message to a person (e.g. the account's CSM).
+export const dm = (slackId, name, text, blocks) => postMessage(slackId, text, blocks, 'Direct message', `a DM to ${name}`);
+
 export function updateMessage(channel, ts, text, blocks) {
   return send({
     system: 'slack',

@@ -12,7 +12,8 @@ import * as intercom from './src/connectors/intercom.js';
 import * as slack from './src/connectors/slack.js';
 import * as snowflake from './src/connectors/snowflake.js';
 import * as claude from './src/connectors/claude.js';
-import { CLOSE_REASONS, CONFIG, DEAL_STAGES, ONBOARDING_STEPS, PEOPLE, USERS, db, reset } from './src/store.js';
+import { CLOSE_REASONS, CONFIG, DEAL_STAGES, FR_STATUSES, ONBOARDING_STEPS, PEOPLE, USERS, db, reset } from './src/store.js';
+import { HEALTH_WEIGHTS, anomalyText, computeHealth } from './src/health.js';
 import * as svc from './src/services.js';
 import { goodMorning } from './src/home.js';
 import { CLASSIFICATIONS, classificationLabel, suggestedCloseReason } from './src/classify.js';
@@ -78,6 +79,34 @@ const summary = (a) => ({
   openTickets: a.tickets.filter((t) => t.status !== 'Done').length,
   openConversations: a.conversations.filter((c) => c.state === 'open').length,
   pendingApproval: db.approvals.some((p) => p.accountId === a.id && p.status === 'pending'),
+  ...healthView(a),
+});
+
+function healthView(a) {
+  const h = computeHealth(a, db.anomalies);
+  const openConvs = a.conversations.filter((c) => c.state === 'open');
+  return {
+    healthLevel: h.level, healthReasons: h.reasons, healthParts: h.parts, usageTrendPct: h.trend == null ? null : Math.round(h.trend * 100),
+    renewalDate: a.renewalDate ?? null, renewalDays: h.renewalDays ?? null,
+    support: {
+      open: openConvs.length,
+      escalated: a.conversations.filter((c) => c.escalatedTo && c.state === 'open').length,
+      overdue: openConvs.filter((c) => c.slaDueAt && new Date(c.slaDueAt) < new Date()).length,
+      byType: openConvs.map((c) => classificationLabel(c.classification)),
+    },
+    anomalies: db.anomalies.filter((x) => x.accountId === a.id && x.status === 'new').map((x) => ({ ...x, text: anomalyText(x) })),
+    featureRequests: {
+      open: db.featureRequests.filter((f) => !['shipped', 'declined'].includes(f.status) && f.accounts.some((r) => r.accountId === a.id)).length,
+      toTell: db.featureRequests.filter((f) => f.status === 'shipped' && f.accounts.some((r) => r.accountId === a.id && !r.notified)).length,
+    },
+  };
+}
+
+const frView = (f) => ({
+  ...f,
+  accounts: f.accounts.map((r) => { const a = db.accounts.find((x) => x.id === r.accountId); return { ...r, name: a?.name, csm: a?.csm, segment: a?.segment, arr: a?.deal.amount ?? 0 }; }),
+  arr: f.accounts.reduce((s, r) => s + (db.accounts.find((x) => x.id === r.accountId)?.deal.amount ?? 0), 0),
+  next: svc.nextFeatureStatus(f),
 });
 
 const integrations = () => [
@@ -91,7 +120,7 @@ const integrations = () => [
 
 const routes = [
   ['GET', /^\/api\/meta$/, () => ({
-    stages: DEAL_STAGES, users: USERS, people: PEOPLE, classifications: CLASSIFICATIONS, config: CONFIG, integrations: integrations(), closeReasons: CLOSE_REASONS,
+    stages: DEAL_STAGES, users: USERS, people: PEOPLE, classifications: CLASSIFICATIONS, frStatuses: FR_STATUSES, healthWeights: HEALTH_WEIGHTS, config: CONFIG, integrations: integrations(), closeReasons: CLOSE_REASONS,
     steps: ONBOARDING_STEPS.map(({ id, label, auto, hint }) => ({ id, label, auto: Boolean(auto), hint })),
   })],
   ['GET', /^\/api\/home$/, (req) => goodMorning(actorOf(req))],
@@ -99,11 +128,18 @@ const routes = [
   ['GET', /^\/api\/accounts\/([\w-]+)$/, (req, [id]) => {
     const a = db.accounts.find((x) => x.id === id);
     if (!a) throw new svc.HttpError(404, 'Account not found');
-    return { ...a, approvals: db.approvals.filter((p) => p.accountId === id) };
+    return {
+      ...a, ...healthView(a),
+      approvals: db.approvals.filter((p) => p.accountId === id),
+      allAnomalies: db.anomalies.filter((x) => x.accountId === id).map((x) => ({ ...x, text: anomalyText(x) })),
+      featureRequestList: db.featureRequests.filter((f) => f.accounts.some((r) => r.accountId === id)).map(frView),
+      conversationsView: a.conversations.map((c) => ({ ...c, classificationLabel: classificationLabel(c.classification) })),
+    };
   }],
   ['GET', /^\/api\/inbox$/, () =>
     db.accounts.flatMap((a) => a.conversations.map((c) => ({ ...c, account: summary(a), classificationLabel: classificationLabel(c.classification), suggestedCloseReason: c.ai?.category ?? suggestedCloseReason(c.classification) })))
       .sort((x, y) => (y.state === 'open') - (x.state === 'open') || y.updatedAt.localeCompare(x.updatedAt))],
+  ['GET', /^\/api\/feature-requests$/, () => db.featureRequests.map(frView)],
   ['GET', /^\/api\/approvals$/, () => db.approvals.map((p) => ({ ...p, account: summary(db.accounts.find((a) => a.id === p.accountId)) }))],
   ['GET', /^\/api\/log$/, () => getLog()],
   // Activity log: one row per user action, with the plain-language steps it caused
@@ -123,6 +159,18 @@ const routes = [
   ['POST', /^\/api\/accounts\/([\w-]+)\/notes$/, (req, [id], b) => svc.addNote(id, b.text, actorOf(req).name)],
   ['POST', /^\/api\/accounts\/([\w-]+)\/tickets$/, (req, [id], b) => svc.openTicket(id, b, actorOf(req).name)],
   ['POST', /^\/api\/accounts\/([\w-]+)\/sync-usage$/, (req, [id]) => svc.syncUsage(id, actorOf(req).name)],
+  ['POST', /^\/api\/anomalies\/scan$/, (req) => svc.detectAnomalies(actorOf(req).name)],
+  ['POST', /^\/api\/anomalies\/([\w-]+)\/ack$/, (req, [id]) => svc.acknowledgeAnomaly(id, actorOf(req).name)],
+  ['POST', /^\/api\/feature-requests\/([\w-]+)\/tell$/, (req, [id], b) => svc.tellCustomer(id, b.accountId, actorOf(req).name)],
+  // Demo: behaves exactly like the Jira webhook moving the issue one status forward
+  ['POST', /^\/api\/feature-requests\/([\w-]+)\/advance$/, (req, [id]) => {
+    const f = db.featureRequests.find((x) => x.id === id);
+    if (!f) throw new svc.HttpError(404, 'Feature request not found');
+    const next = svc.nextFeatureStatus(f);
+    if (!next) throw new svc.HttpError(400, 'Nothing to advance');
+    setActor('Jira');
+    return svc.setFeatureStatus(f.jiraKey, next, 'Jira');
+  }],
   ['POST', /^\/api\/onboarding\/sync$/, async (req) => {
     const ids = db.accounts.filter((a) => a.status === 'Onboarding').map((a) => a.id);
     const results = [];
@@ -176,6 +224,16 @@ async function handleWebhook(req, res, source) {
     const result = await svc.decideApproval(action.value, decision, who, 'slack');
     return json(res, 200, { ok: true, status: result.approval.status });
   }
+  if (source === 'jira') {
+    // jira:issue_updated → map Jira workflow status names to ours
+    const payload = parseJson(raw);
+    const key = payload.issue?.key;
+    const name = String(payload.issue?.fields?.status?.name ?? '').toLowerCase();
+    const map = { submitted: 'submitted', 'to do': 'submitted', 'under review': 'under_review', planned: 'planned', 'in progress': 'in_progress', done: 'shipped', shipped: 'shipped', "won't do": 'declined', declined: 'declined' };
+    if (!key || !map[name]) return json(res, 200, { ignored: true });
+    setActor('Jira');
+    return json(res, 200, await svc.setFeatureStatus(key, map[name], 'Jira'));
+  }
   json(res, 404, { error: 'Unknown webhook source' });
 }
 
@@ -209,7 +267,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/events') return sse(req, res);
     if (pathname === '/healthz') return json(res, 200, { ok: true });
     const hook = pathname.match(/^\/webhooks\/(\w+)/);
-    if (hook && req.method === 'POST') return await withActivity(hook[1] === 'slack' ? 'Slack' : 'Intercom', () => handleWebhook(req, res, hook[1]));
+    if (hook && req.method === 'POST') return await withActivity({ slack: 'Slack', jira: 'Jira' }[hook[1]] ?? 'Intercom', () => handleWebhook(req, res, hook[1]));
 
     for (const [method, pattern, handler] of routes) {
       const m = pathname.match(pattern);
@@ -228,6 +286,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 setInterval(() => svc.checkSla().catch((e) => console.error('SLA check failed', e)), 30_000);
+setInterval(() => withActivity('Snowflake monitor', () => svc.detectAnomalies('Snowflake monitor')).catch((e) => console.error('Anomaly check failed', e)), 30 * 60_000);
 
 server.listen(PORT, () => {
   console.log(`Reeco Hub → http://localhost:${PORT}`);

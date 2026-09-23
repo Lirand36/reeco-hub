@@ -10,7 +10,8 @@ import * as claude from './connectors/claude.js';
 import { bus } from './bus.js';
 import { announce, withActivity } from './activity.js';
 import { CLASSIFICATIONS, classify, classificationLabel, fromCloseReason } from './classify.js';
-import { CLOSE_REASONS, CONFIG, DEAL_STAGES, ONBOARDING_STEPS, PEOPLE, USERS, db, findAccount, findAccountByEmail, findConversation } from './store.js';
+import { CLOSE_REASONS, CONFIG, DEAL_STAGES, FR_STATUSES, ONBOARDING_STEPS, PEOPLE, USERS, db, findAccount, findAccountByEmail, findConversation } from './store.js';
+import { anomalyText, computeHealth } from './health.js';
 
 export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -36,7 +37,13 @@ function failIfRejected(entry) {
   if (!entry.ok) throw new HttpError(502, `${SYSTEM_NAMES[entry.system] ?? entry.system} didn't respond, so nothing was changed. Please try again in a minute.`);
 }
 
-const changed = (accountId) => bus.emit('changed', { accountId });
+// Any change can move an account's health, so recompute before telling the UI.
+function changed(accountId) {
+  const a = accountId && findAccount(accountId);
+  if (a) a.health = computeHealth(a, db.anomalies).score;
+  bus.emit('changed', { accountId });
+}
+const csmOf = (a) => USERS.find((u) => u.name === a.csm);
 const track = (event, accountId, actor, props) => snowflake.trackEvent(event, accountId, actor, props);
 
 // ---------------------------------------------------------------- sales
@@ -208,6 +215,7 @@ async function closeWithReason(a, c, reason, actor) {
   Object.assign(c, { state: 'closed', closeReason: reason, closedAt: now(), closedBy: actor, snoozedUntil: null, slaDueAt: null });
   await track('conversation.closed', a.id, actor, { conversationId: c.id, reason });
   announce(`Conversation with ${first(customerOf(c))} at ${a.name} closed as “${reasonLabel(reason)}”.`, { icon: '✓', accountId: a.id });
+  if (reason === 'feature_request') await logFeatureRequest(a, c, actor);
 }
 
 const customerOf = (c) => c.messages.find((m) => m.from === 'customer')?.author ?? 'the customer';
@@ -384,7 +392,9 @@ export async function escalate(conversationId, actor) {
   a.tickets.unshift({ key, summary: c.subject, status: 'To Do', priority: a.segment === 'Enterprise' ? 'Highest' : 'High', createdAt: now() });
   await track('conversation.escalated', a.id, actor, { conversationId: c.id, jira: key });
   const vp = PEOPLE.vpSupport;
-  announce(`Ticket ${key} escalated to engineering, and ${vp.name} (${vp.title}) was notified.`, { icon: '🚨', accountId: a.id });
+  const csm = csmOf(a);
+  if (csm) await slack.dm(csm.slackId, csm.name, `Heads-up: ${a.name} escalated to engineering (${key})`, [slack.section(`:rotating_light: *${a.name}*: “${c.subject}” was escalated to engineering as *${key}* by ${actor}.`)]);
+  announce(`Ticket ${key} escalated to engineering. ${vp.name} (${vp.title})${csm ? ` and ${csm.name} (CSM)` : ''} were notified.`, { icon: '🚨', accountId: a.id });
   changed(a.id);
   return { conversation: c, key };
 }
@@ -434,6 +444,8 @@ export async function ingestIntercom(payload) {
   if (reasons.length) {
     c.flagged = reasons;
     await postEscalation(a, c, `:warning: *Auto-flagged:* ${reasons.join(' + ')}`);
+    const csm = csmOf(a);
+    if (csm) await slack.dm(csm.slackId, csm.name, `New flagged support message from ${a.name}`, [slack.section(`:warning: *${a.name}* wrote in: “${text.slice(0, 140)}”`)]);
   }
   await track('conversation.inbound', a.id, 'intercom', { conversationId: c.id, flagged: reasons });
   const who = `${first(a.contact.name)} at ${a.name}`;
@@ -543,4 +555,155 @@ async function maybeGoLive(a, actor) {
   ], 'Go-live');
   await track('onboarding.completed', a.id, actor, {});
   announce(`${a.name} finished onboarding and is live! The team was told in #deals.`, { icon: '🏁', accountId: a.id });
+}
+
+// ---------------------------------------------------------------- CS: usage anomalies (Snowflake)
+
+const METRICS = [
+  { id: 'pos', label: 'Purchase orders' },
+  { id: 'invoicesAi', label: 'AI-processed invoices' },
+  { id: 'activeUsers', label: 'Active users' },
+  { id: 'syncErrors', label: 'ERP sync errors', spike: true },
+];
+
+// Latest week vs the average of the 4 weeks before: a drop of 30%+ or an error spike is an anomaly.
+function findAnomalies(a, rows) {
+  const found = [];
+  for (const m of METRICS) {
+    const vals = rows.map((r) => Number(r[m.id.replace(/[A-Z]/g, (ch) => `_${ch.toLowerCase()}`)]));
+    if (vals.length < 5) continue;
+    const latest = vals.at(-1);
+    const base = vals.slice(-5, -1).reduce((x, y) => x + y, 0) / 4;
+    if (m.spike) {
+      if (latest >= 10 && latest >= base * 3) found.push({ metric: m.id, label: `${a.platform?.erp ?? 'ERP'} sync errors`, direction: 'up', change: latest / Math.max(1, base), current: latest, baseline: Math.round(base), severity: 'bad' });
+    } else if (base >= 20 && latest <= base * 0.7) {
+      const drop = 1 - latest / base;
+      found.push({ metric: m.id, label: m.label, direction: 'down', change: drop, current: latest, baseline: Math.round(base), severity: drop >= 0.4 ? 'bad' : 'warn' });
+    }
+  }
+  return found;
+}
+
+export async function detectAnomalies(actor) {
+  const accounts = db.accounts.filter((a) => a.usageSeries && a.status !== 'Prospect');
+  const entry = await snowflake.queryWeeklyUsage(accounts.map((a) => a.hubspotCompanyId), () =>
+    accounts.flatMap((a) => a.usageSeries.pos.slice(-5).map((_, i) => {
+      const k = a.usageSeries.pos.length - 5 + i;
+      return { hubspot_company_id: a.hubspotCompanyId, week_start: new Date(Date.now() - (4 - i) * 7 * 86400000).toISOString().slice(0, 10), pos: a.usageSeries.pos[k], invoices_ai: a.usageSeries.invoicesAi[k], active_users: a.usageSeries.activeUsers[k], sync_errors: a.usageSeries.syncErrors[k] };
+    })));
+  failIfRejected(entry);
+  const rows = snowflake.rowsOf(entry);
+  const fresh = [];
+  for (const a of accounts) {
+    for (const x of findAnomalies(a, rows.filter((r) => r.hubspot_company_id === a.hubspotCompanyId))) {
+      if (db.anomalies.some((o) => o.accountId === a.id && o.metric === x.metric && o.status !== 'resolved')) continue;
+      const an = { id: `an_${Date.now()}_${x.metric}`, accountId: a.id, ...x, detectedAt: now(), status: 'new' };
+      db.anomalies.unshift(an);
+      fresh.push({ a, an });
+    }
+  }
+  for (const { a, an } of fresh) {
+    const csm = csmOf(a);
+    if (csm) await slack.dm(csm.slackId, csm.name, `Usage anomaly at ${a.name}`, [slack.section(`:chart_with_downwards_trend: *${a.name}*: ${anomalyText(an)}`), slack.context(`<${hubUrl(`/accounts/${a.id}?tab=health`)}|Open in Reeco Hub>`)]);
+    await track('usage.anomaly_detected', a.id, 'system', { metric: an.metric, change: an.change });
+    changed(a.id);
+  }
+  if (!fresh.length && actor === 'Snowflake monitor') return { found: 0 }; // stay quiet on routine checks
+  announce(fresh.length
+    ? `${fresh.length === 1 ? 'Usage anomaly' : `${fresh.length} usage anomalies`} found: ${fresh.map(({ a, an }) => `${a.name}, ${anomalyText(an)}`).join('; ')}. The CSM was notified in Slack.`
+    : 'Usage checked in Snowflake. No new anomalies.', { icon: fresh.length ? '📉' : '✓', tone: fresh.length ? 'warn' : 'info' });
+  return { found: fresh.length };
+}
+
+export async function acknowledgeAnomaly(id, actor) {
+  const an = db.anomalies.find((x) => x.id === id);
+  need(an, 404, 'Anomaly not found');
+  need(an.status === 'new', 409, 'Already reviewed');
+  const a = getAccount(an.accountId);
+  failIfRejected(await hubspot.createNote(a.hubspotCompanyId, `Usage anomaly reviewed by ${actor}: ${anomalyText(an)}`));
+  Object.assign(an, { status: 'acknowledged', reviewedBy: actor, reviewedAt: now() });
+  await track('usage.anomaly_acknowledged', a.id, actor, { metric: an.metric });
+  announce(`Anomaly at ${a.name} marked as reviewed. A note was saved in HubSpot.`, { icon: '✓', accountId: a.id });
+  changed(a.id);
+  return { anomaly: an };
+}
+
+// ---------------------------------------------------------------- CS: feature requests (Jira PROD)
+
+const frLabel = (id) => FR_STATUSES.find((x) => x.id === id)?.label ?? id;
+
+// Words that carry meaning, for matching a new request to one already in Jira.
+const keywords = (t) => new Set(String(t).toLowerCase().match(/[a-z]{4,}/g)?.filter((w) => !['from', 'with', 'that', 'this', 'into', 'have', 'differ', 'differs'].includes(w)).map((w) => w.replace(/s$/, '')) ?? []);
+function similar(x, y) {
+  const A = keywords(x), B = keywords(y);
+  const shared = [...A].filter((w) => B.has(w)).length;
+  return shared / Math.max(1, Math.min(A.size, B.size));
+}
+
+async function logFeatureRequest(a, c, actor) {
+  const title = c.subject.replace(/^request:\s*/i, '');
+  // Already tracked? Add this account to the existing request instead of opening a duplicate.
+  const existing = db.featureRequests.find((f) => f.accounts.some((r) => r.source === c.id))
+    ?? db.featureRequests.find((f) => f.status !== 'declined' && similar(f.title, `${title} ${c.messages.map((m) => m.text).join(' ')}`) >= 0.5);
+  if (existing) {
+    if (!existing.accounts.some((r) => r.accountId === a.id)) existing.accounts.push({ accountId: a.id, requestedAt: now(), source: c.id, notified: false });
+    await track('feature_request.linked', a.id, actor, { jira: existing.jiraKey });
+    announce(`Conversation closed. ${a.name} is now counted on the existing request “${existing.title}” (${existing.jiraKey}, ${FR_STATUSES.find((x) => x.id === existing.status)?.label}).`, { icon: '💡', accountId: a.id });
+    return;
+  }
+  const issue = await jira.createIssue({
+    project: 'product', type: 'Story', priority: 'Medium', labels: ['feature-request', a.segment.toLowerCase()],
+    summary: title,
+    description: `Requested by ${customerOf(c)} at ${a.name} (${a.segment}, ${money(a.deal.amount)} ARR). Logged by ${actor} from Intercom conversation ${c.id}.\n\n"${c.messages.find((m) => m.from === 'customer')?.text ?? ''}"`,
+  });
+  failIfRejected(issue);
+  const fr = { id: `fr_${issue.response.key.split('-')[1]}`, title, jiraKey: issue.response.key, status: 'submitted', updatedAt: now(), accounts: [{ accountId: a.id, requestedAt: now(), source: c.id, notified: false }] };
+  db.featureRequests.unshift(fr);
+  await track('feature_request.logged', a.id, actor, { jira: fr.jiraKey });
+  announce(`Conversation closed and the feature request was logged in Jira as ${fr.jiraKey}. ${a.csm} (CSM) can follow it on the account page.`, { icon: '💡', accountId: a.id });
+}
+
+// Jira tells us a request moved (webhook). CSMs of every account that asked are told.
+export async function setFeatureStatus(jiraKey, status, actor = 'Jira') {
+  const fr = db.featureRequests.find((x) => x.jiraKey === jiraKey);
+  need(fr, 404, 'Feature request not found');
+  need(FR_STATUSES.some((x) => x.id === status), 400, 'Unknown status');
+  if (fr.status === status) return { featureRequest: fr };
+  fr.status = status;
+  fr.updatedAt = now();
+  const csms = [...new Set(fr.accounts.map((r) => findAccount(r.accountId)?.csm).filter(Boolean))];
+  for (const name of csms) {
+    const u = USERS.find((x) => x.name === name);
+    const accts = fr.accounts.map((r) => findAccount(r.accountId)).filter((x) => x?.csm === name).map((x) => x.name);
+    if (u) await slack.dm(u.slackId, u.name, `${fr.jiraKey} is now ${frLabel(status)}`, [slack.section(`:bulb: *${fr.title}* (${fr.jiraKey}) moved to *${frLabel(status)}*.\nAsked for by: ${accts.join(', ')}`)]);
+  }
+  for (const r of fr.accounts) { await track('feature_request.status', r.accountId, actor, { jira: fr.jiraKey, status }); changed(r.accountId); }
+  const names = fr.accounts.map((r) => findAccount(r.accountId)?.name).filter(Boolean);
+  announce(`“${fr.title}” (${fr.jiraKey}) is now ${frLabel(status)}.${status === 'shipped' ? ` Time to tell ${names.join(' and ')}.` : ''} ${csms.join(' and ')} ${csms.length > 1 ? 'were' : 'was'} notified.`,
+    { icon: status === 'shipped' ? '🚀' : '💡', tone: status === 'shipped' ? 'good' : 'info' });
+  return { featureRequest: fr };
+}
+
+// Demo helper: the next status a Jira update would move a request to.
+export function nextFeatureStatus(fr) {
+  const flow = ['submitted', 'under_review', 'planned', 'in_progress', 'shipped'];
+  const i = flow.indexOf(fr.status);
+  return i >= 0 && i < flow.length - 1 ? flow[i + 1] : null;
+}
+
+export async function tellCustomer(frId, accountId, actor) {
+  const fr = db.featureRequests.find((x) => x.id === frId);
+  need(fr, 404, 'Feature request not found');
+  need(fr.status === 'shipped', 400, 'Only shipped requests can be announced');
+  const r = fr.accounts.find((x) => x.accountId === accountId);
+  need(r, 404, 'This account did not ask for it');
+  need(!r.notified, 409, 'Customer already told');
+  const a = getAccount(accountId);
+  failIfRejected(await intercom.message(a.contact.email, a.contact.name, `Hi ${first(a.contact.name)}, good news: “${fr.title}”, which you asked for, is now live in Reeco. Reply here if you'd like a quick walkthrough. ${actor}`));
+  await hubspot.createNote(a.hubspotCompanyId, `Told ${a.contact.name} that “${fr.title}” (${fr.jiraKey}) shipped.`);
+  Object.assign(r, { notified: true, notifiedAt: now(), notifiedBy: actor });
+  await track('feature_request.customer_told', a.id, actor, { jira: fr.jiraKey });
+  announce(`${first(a.contact.name)} at ${a.name} was told that “${fr.title}” is live. A note was saved in HubSpot.`, { icon: '📣', accountId: a.id });
+  changed(a.id);
+  return { featureRequest: fr };
 }

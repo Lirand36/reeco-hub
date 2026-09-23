@@ -27,6 +27,21 @@ export const reply = (id, text) =>
 export const note = (id, text) =>
   part(id, 'Add internal note', { message_type: 'note', type: 'admin', admin_id: adminId(), body: text }, 'open', 'Left an internal note for the team');
 
+// Admin-initiated in-app message to a customer (e.g. "the feature you asked for is live").
+export function message(email, name, text) {
+  return send({
+    system: 'intercom',
+    action: 'Message customer',
+    summary: `Sent ${name} an in-app message`,
+    method: 'POST',
+    url: `${BASE}/messages`,
+    headers: headers(),
+    body: { message_type: 'inapp', body: text, from: { type: 'admin', id: adminId() }, to: { type: 'user', email } },
+    live: isLive(),
+    mockResponse: () => ({ type: 'admin_message', id: String(Math.floor(Math.random() * 1e9)), message_type: 'inapp' }),
+  });
+}
+
 export const close = (id) =>
   part(id, 'Close conversation', { message_type: 'close', type: 'admin', admin_id: adminId() }, 'closed', 'Closed the conversation');
 

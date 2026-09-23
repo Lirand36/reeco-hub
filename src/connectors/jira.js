@@ -7,22 +7,23 @@ const cfg = () => ({
   token: process.env.JIRA_API_TOKEN,
   supportProject: process.env.JIRA_SUPPORT_PROJECT || 'SUP',
   onboardingProject: process.env.JIRA_ONBOARDING_PROJECT || 'ONB',
+  productProject: process.env.JIRA_PRODUCT_PROJECT || 'PROD',
 });
 export const isLive = () => {
   const c = cfg();
   return Boolean(c.base && c.email && c.token);
 };
 
-const seq = { SUP: 2310, ONB: 118 };
+const seq = { SUP: 2310, ONB: 118, PROD: 431 };
 
-// project: 'support' | 'onboarding'
+// project: 'support' | 'onboarding' | 'product' (feature requests)
 export function createIssue({ project = 'support', type = 'Task', summary, description, priority = 'Medium', labels = [] }) {
   const c = cfg();
-  const key = project === 'onboarding' ? c.onboardingProject : c.supportProject;
+  const key = { onboarding: c.onboardingProject, product: c.productProject }[project] ?? c.supportProject;
   return send({
     system: 'jira',
     action: type === 'Epic' ? 'Create epic' : 'Create issue',
-    summary: (r) => `Opened ${type === 'Epic' ? 'onboarding epic' : type === 'Bug' ? 'engineering bug' : 'ticket'} ${r.key}`,
+    summary: (r) => `Opened ${type === 'Epic' ? 'onboarding epic' : type === 'Bug' ? 'engineering bug' : project === 'product' ? 'feature request' : 'ticket'} ${r.key}`,
     method: 'POST',
     url: `${c.base || 'https://reeco.atlassian.net'}/rest/api/3/issue`,
     headers: { Authorization: `Basic ${Buffer.from(`${c.email}:${c.token}`).toString('base64')}` },

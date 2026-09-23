@@ -140,6 +140,38 @@ async function refreshBadges() {
   const set = (id, n) => { const b = $(id); b.hidden = !n; b.textContent = n; };
   set('#badge-inbox', inbox.filter((c) => c.state === 'open').length);
   set('#badge-approvals', approvals.filter((p) => p.status === 'pending').length);
+  const accounts = await api('/api/accounts');
+  set('#badge-portfolio', accounts.filter((a) => a.csm === user().name).reduce((n, a) => n + a.anomalies.length, 0));
+}
+
+
+// ---------- CS building blocks ----------
+const RISK = { high: { label: 'High risk', tone: 'bad' }, medium: { label: 'Medium risk', tone: 'warn' }, low: { label: 'Healthy', tone: 'good' } };
+const riskChip = (level, score) => (level ? `<span class="chip ${RISK[level].tone}"><span class="dot" aria-hidden="true"></span>${RISK[level].label}${score != null ? ` · ${score}` : ''}</span>` : '<span class="muted small">–</span>');
+const trendText = (pct) => (pct == null ? '<span class="muted">too early</span>' : `<span class="${pct <= -10 ? 'tone-bad' : pct >= 5 ? 'tone-good' : ''}">${pct > 0 ? '↑' : pct < 0 ? '↓' : '→'} ${Math.abs(pct)}%</span>`);
+
+// Single-series sparkline: 2px line, marker on the latest point, hover title per week.
+function sparkline(values, { label = '', alert = false, w = 160, h = 40 } = {}) {
+  if (!values?.length) return '';
+  const max = Math.max(...values, 1), min = Math.min(...values, 0);
+  const x = (i) => 4 + (i * (w - 8)) / (values.length - 1);
+  const y = (v) => h - 4 - ((v - min) / (max - min || 1)) * (h - 8);
+  const pts = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  const last = values.length - 1;
+  const weekOf = (i) => new Date(Date.now() - (last - i) * 7 * 86400000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  return `<svg class="spark ${alert ? 'alert' : ''}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="${esc(label)}: ${values.join(', ')} over the last ${values.length} weeks">
+    <polyline points="${pts}" fill="none" vector-effect="non-scaling-stroke"/>
+    <circle cx="${x(last)}" cy="${y(values[last])}" r="4" class="last"/>
+    ${values.map((v, i) => `<circle cx="${x(i)}" cy="${y(v)}" r="9" class="hit"><title>Week of ${weekOf(i)}: ${v.toLocaleString('en-US')}</title></circle>`).join('')}
+  </svg>`;
+}
+
+const FR_FLOW = ['submitted', 'under_review', 'planned', 'in_progress', 'shipped'];
+const frLabel = (id) => state.meta.frStatuses.find((x) => x.id === id)?.label ?? id;
+function frStatus(status) {
+  if (status === 'declined') return '<span class="chip">Declined</span>';
+  const i = FR_FLOW.indexOf(status);
+  return `<span class="fr-status" title="${esc(frLabel(status))}"><span class="fr-dots" aria-hidden="true">${FR_FLOW.map((_, k) => `<span class="${k <= i ? 'on' : ''} ${status === 'shipped' ? 'shipped' : ''}"></span>`).join('')}</span><span class="${status === 'shipped' ? 'tone-good' : ''}">${esc(frLabel(status))}</span></span>`;
 }
 
 // ---------- good morning ----------
@@ -329,6 +361,142 @@ function bindReplies(root) {
   }));
 }
 
+
+// ---------- account tabs ----------
+const ACCOUNT_TABS = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'health', label: 'Health & usage', live: true, count: (a) => a.anomalies.length || '' },
+  { id: 'support', label: 'Support', count: (a) => a.support.open || '' },
+  { id: 'requests', label: 'Feature requests', count: (a) => a.featureRequestList.length || '' },
+];
+const METRIC_TILES = [
+  ['pos', 'Purchase orders / week'], ['invoicesAi', 'AI-processed invoices / week'], ['activeUsers', 'Active users'], ['syncErrors', 'ERP sync errors / week'],
+];
+
+function healthPanel(a) {
+  const anomalyFor = (m) => a.anomalies.find((x) => x.metric === m);
+  const partTone = (v) => (v >= 70 ? 'good' : v >= 50 ? 'warn' : 'bad');
+  return `
+    <div class="health-grid">
+      <section class="card card-pad">
+        <div class="muted small">Health score</div>
+        <div class="hs-row"><span class="hs-num tone-${RISK[a.healthLevel].tone}">${a.health}</span>${riskChip(a.healthLevel)}</div>
+        <div class="muted small">${a.renewalDate ? `Renewal ${new Date(a.renewalDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} · in ${a.renewalDays} days` : ''}</div>
+        <h3 class="sub">Why</h3>
+        ${a.healthReasons.length ? `<ul class="reasons-list">${a.healthReasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>` : '<p class="muted small">No warning signs. Keep doing what works.</p>'}
+      </section>
+      <section class="card card-pad">
+        <div class="spread"><h2>What makes up the score</h2><span class="muted xs">Weighted</span></div>
+        <div class="parts">
+          ${a.healthParts.map((p) => `
+            <div class="part">
+              <div class="spread"><span class="small" style="font-weight:500">${esc(p.label)} <span class="muted xs">${Math.round(state.meta.healthWeights[p.id] * 100)}%</span></span><span class="num small tone-${partTone(p.score)}">${p.score}</span></div>
+              <div class="bar"><span style="width:${p.score}%;background:var(--${partTone(p.score)})"></span></div>
+              <div class="muted xs">${esc(p.detail)}</div>
+            </div>`).join('')}
+        </div>
+      </section>
+    </div>
+
+    <section class="card" style="margin-top:16px">
+      <div class="card-head">
+        <div><h2>Weekly usage · last 12 weeks</h2><div class="muted small">From Snowflake. An anomaly is last week vs the 4 weeks before: a drop of 30%+ or an error spike.</div></div>
+        <button class="btn sm" data-scan>❄ Check for anomalies</button>
+      </div>
+      <div class="metric-grid">
+        ${METRIC_TILES.map(([m, label]) => {
+          const vals = a.usageSeries?.[m] ?? [];
+          const an = anomalyFor(m);
+          return `<div class="metric ${an ? 'is-alert' : ''}">
+            <div class="muted xs">${esc(label)}</div>
+            <div class="spread"><span class="v num">${vals.length ? vals.at(-1).toLocaleString('en-US') : '–'}</span>${an ? `<span class="chip ${an.severity}"><svg class="ico"><use href="#i-alert"/></svg>Anomaly</span>` : ''}</div>
+            ${sparkline(vals, { label, alert: Boolean(an) })}
+          </div>`;
+        }).join('')}
+      </div>
+    </section>
+
+    <section class="card" style="margin-top:16px">
+      <div class="card-head"><h2>Usage anomalies</h2>${src('snowflake')}</div>
+      ${a.allAnomalies.length ? a.allAnomalies.map((x) => `
+        <div class="list-item">
+          <svg class="ico tone-${x.severity}" style="width:18px;height:18px"><use href="#i-alert"/></svg>
+          <div class="grow"><div>${esc(x.text)}</div><div class="muted xs">Detected ${rel(x.detectedAt)}${x.reviewedBy ? ` · reviewed by ${esc(x.reviewedBy)}` : ''}</div></div>
+          ${x.status === 'new' ? `<button class="btn sm" data-ack="${esc(x.id)}">Mark reviewed</button>` : '<span class="chip good">Reviewed</span>'}
+        </div>`).join('') : '<div class="empty">No anomalies. Usage looks normal.</div>'}
+    </section>`;
+}
+
+function supportPanel(a) {
+  const open = a.conversationsView.filter((c) => c.state === 'open');
+  const closed = a.conversationsView.filter((c) => c.state === 'closed');
+  const bugs = a.tickets.filter((t) => t.status !== 'Done');
+  return `
+    <div class="kpis kpis-3">
+      <div class="card kpi"><div class="muted small">Open conversations</div><div class="v num">${a.support.open}</div></div>
+      <div class="card kpi"><div class="muted small">With engineering</div><div class="v num ${a.support.escalated ? 'tone-warn' : ''}">${a.support.escalated}</div></div>
+      <div class="card kpi"><div class="muted small">Overdue replies</div><div class="v num ${a.support.overdue ? 'tone-bad' : ''}">${a.support.overdue}</div></div>
+    </div>
+    <div class="detail-grid">
+      <section class="card">
+        <div class="card-head"><h2>Open conversations</h2>${src('intercom')}</div>
+        ${open.map((c) => `
+          <a class="list-item link-row" href="#/inbox/${esc(c.id)}">
+            <div class="grow">
+              <div style="font-weight:500">${esc(c.subject)}</div>
+              <div class="ii-facts">
+                ${urgency(c) ? `<div class="fact ${urgency(c).tone}"><svg class="ico"><use href="#i-clock"/></svg>${urgency(c).text}</div>` : ''}
+                <div class="fact"><svg class="ico"><use href="#i-tag"/></svg><span class="k">Classification:</span>${esc(c.classificationLabel)}${c.escalatedTo ? ` <span class="mono info-text">· ${esc(c.escalatedTo)}</span>` : ''}</div>
+                <div class="fact ${c.assignee ? '' : 'warn'}"><svg class="ico"><use href="#i-user"/></svg><span class="k">Owner:</span>${c.assignee ? esc(c.assignee) : 'Unassigned'}</div>
+              </div>
+            </div>
+            <svg class="ico muted"><use href="#i-arrow"/></svg>
+          </a>`).join('') || '<div class="empty">No open conversations.</div>'}
+        <div class="card-head" style="border-top:1px solid var(--border)"><h2>Past conversations</h2></div>
+        ${closed.map((c) => `
+          <a class="list-item link-row" href="#/inbox/${esc(c.id)}"><div class="grow"><div>${esc(c.subject)}</div><div class="muted xs">${esc(c.classificationLabel)} · closed as ${esc(reasonLabel(c.closeReason ?? ''))} · ${rel(c.updatedAt)}</div></div></a>`).join('') || '<div class="empty">None yet.</div>'}
+      </section>
+      <section class="card">
+        <div class="card-head"><h2>Engineering tickets</h2>${src('jira')}</div>
+        ${bugs.map((t) => `
+          <div class="list-item">
+            <span class="mono muted" style="min-width:74px">${esc(t.key)}</span>
+            <div class="grow">${esc(t.summary)}<div class="muted xs">${rel(t.createdAt)}</div></div>
+            ${ticketStatus(t.status)}
+          </div>`).join('') || '<div class="empty">No open tickets.</div>'}
+      </section>
+    </div>`;
+}
+
+function requestsPanel(a) {
+  const list = a.featureRequestList;
+  return `
+    <section class="card">
+      <div class="card-head"><div><h2>Feature requests from ${esc(a.name)}</h2><div class="muted small">Tracked in Jira. You're notified in Slack whenever one moves.</div></div>${src('jira')}</div>
+      ${list.map((f) => {
+        const mine = f.accounts.find((r) => r.accountId === a.id);
+        const others = f.accounts.filter((r) => r.accountId !== a.id);
+        return `<div class="list-item fr-row">
+          <div class="grow">
+            <div style="font-weight:500">${esc(f.title)} <span class="mono muted xs">${esc(f.jiraKey)}</span></div>
+            <div class="muted xs">Asked ${rel(mine.requestedAt)}${others.length ? ` · also asked by ${others.map((r) => esc(r.name)).join(', ')} (${moneyCompact(f.arr)} ARR in total)` : ''}</div>
+          </div>
+          ${frStatus(f.status)}
+          ${f.status === 'shipped' ? (mine.notified ? '<span class="chip good">Customer told</span>' : `<button class="btn sm primary" data-tell="${esc(f.id)}" data-account="${esc(a.id)}">Tell the customer</button>`) : ''}
+        </div>`;
+      }).join('') || '<div class="empty">No feature requests yet. Support conversations closed as “Feature request” show up here automatically.</div>'}
+    </section>`;
+}
+
+// Buttons shared by the account tabs, portfolio and requests pages.
+function bindCsActions(root) {
+  const go = (btn, path, body) => run(btn, async () => { await api(path, { method: 'POST', body }); route({ keepScroll: true }); });
+  $$('[data-scan]', root).forEach((b) => b.addEventListener('click', () => go(b, '/api/anomalies/scan')));
+  $$('[data-ack]', root).forEach((b) => b.addEventListener('click', () => go(b, `/api/anomalies/${b.dataset.ack}/ack`)));
+  $$('[data-tell]', root).forEach((b) => b.addEventListener('click', () => go(b, `/api/feature-requests/${b.dataset.tell}/tell`, { accountId: b.dataset.account })));
+  $$('[data-advance]', root).forEach((b) => b.addEventListener('click', () => go(b, `/api/feature-requests/${b.dataset.advance}/advance`)));
+}
+
 async function renderAccount(id, query = new URLSearchParams()) {
   const a = await api(`/api/accounts/${id}`);
   const stages = state.meta.stages;
@@ -338,6 +506,8 @@ async function renderAccount(id, query = new URLSearchParams()) {
   const steps = state.meta.steps;
   const doneCount = a.onboarding ? steps.filter((s) => a.onboarding.steps[s.id].done).length : 0;
   const net = a.deal.amount * (1 - (a.deal.discountPct || 0) / 100);
+  // CS lands on health; everyone else on the overview. ?tab= deep-links.
+  const tab = query.get('tab') || (user().team === 'cs' && a.status !== 'Prospect' ? 'health' : 'overview');
 
   view.innerHTML = `
     <nav class="crumbs" aria-label="Breadcrumb"><a href="#/accounts">Accounts</a><span aria-hidden="true">/</span><span aria-current="page">${esc(a.name)}</span></nav>
@@ -349,7 +519,8 @@ async function renderAccount(id, query = new URLSearchParams()) {
           <span class="chip">${esc(a.segment)}</span>
           <span class="chip">${a.properties} ${a.properties === 1 ? 'property' : 'properties'} · ${esc(a.region)}</span>
           <span class="chip">AE ${esc(a.owner)} · CSM ${esc(a.csm)}</span>
-          ${a.health != null ? `<span class="chip ${a.health >= 75 ? 'good' : a.health >= 50 ? 'warn' : 'bad'}">Health ${a.health}</span>` : ''}
+          ${a.health != null ? riskChip(a.healthLevel, a.health) : ''}
+          ${a.renewalDays != null ? `<span class="chip ${a.renewalDays <= 90 ? 'warn' : ''}">Renewal in ${a.renewalDays} days</span>` : ''}
         </div>
       </div>
       <div class="row">
@@ -358,7 +529,15 @@ async function renderAccount(id, query = new URLSearchParams()) {
       </div>
     </div>
 
-    <div class="detail-grid">
+    <div class="tabs" role="tablist" aria-label="Account sections">
+      ${ACCOUNT_TABS.filter((t) => !t.live || a.status !== 'Prospect').map((t) => `<button role="tab" class="tab ${t.id === tab ? 'sel' : ''}" data-acct-tab="${t.id}" aria-selected="${t.id === tab}" aria-controls="panel-${t.id}">${esc(t.label)}${t.count ? ` <span class="num">${t.count(a)}</span>` : ''}</button>`).join('')}
+    </div>
+
+    <div class="tab-panel" id="panel-health" role="tabpanel" ${tab === 'health' ? '' : 'hidden'}>${a.status === 'Prospect' ? '' : healthPanel(a)}</div>
+    <div class="tab-panel" id="panel-support" role="tabpanel" ${tab === 'support' ? '' : 'hidden'}>${supportPanel(a)}</div>
+    <div class="tab-panel" id="panel-requests" role="tabpanel" ${tab === 'requests' ? '' : 'hidden'}>${requestsPanel(a)}</div>
+
+    <div class="tab-panel detail-grid" id="panel-overview" role="tabpanel" ${tab === 'overview' ? '' : 'hidden'}>
       <div class="stack">
         <section class="card">
           <div class="card-head">
@@ -398,28 +577,6 @@ async function renderAccount(id, query = new URLSearchParams()) {
           </div>
         </section>` : ''}
 
-        <section class="card">
-          <div class="card-head"><h2>Conversations</h2>${src('intercom')}</div>
-          ${a.conversations.length ? a.conversations.map((c) => `
-            <div class="${c.id === state.flashId ? 'flash' : ''}" style="border-bottom:1px solid var(--border)">
-              <div class="list-item" style="border:0;padding-bottom:0">
-                <a class="grow link" href="#/inbox/${esc(c.id)}">${esc(c.subject)}</a>
-                ${slaChip(c)} ${c.escalatedTo ? `<span class="chip info">${esc(c.escalatedTo)}</span>` : ''}
-                <span class="chip ${c.state === 'open' ? 'warn' : 'good'}">${c.state === 'open' ? 'Open' : 'Closed'}</span>
-              </div>
-              ${conversationBlock(c)}
-            </div>`).join('') : '<div class="empty">No conversations.</div>'}
-        </section>
-
-        <section class="card">
-          <div class="card-head"><h2>Tickets</h2>${src('jira')}</div>
-          ${a.tickets.length ? a.tickets.map((t) => `
-            <div class="list-item">
-              <span class="mono muted" style="min-width:74px">${esc(t.key)}</span>
-              <div class="grow">${esc(t.summary)}<div class="muted xs">${rel(t.createdAt)}</div></div>
-              ${priorityChip(t.priority)} ${ticketStatus(t.status)}
-            </div>`).join('') : '<div class="empty">No tickets.</div>'}
-        </section>
       </div>
 
       <div class="stack">
@@ -456,6 +613,13 @@ async function renderAccount(id, query = new URLSearchParams()) {
       </div>
     </div>`;
   state.flashId = null;
+
+  $$('[data-acct-tab]').forEach((b) => b.addEventListener('click', () => {
+    history.replaceState(null, '', `#/accounts/${id}?tab=${b.dataset.acctTab}`);
+    $$('[data-acct-tab]').forEach((x) => { const on = x === b; x.classList.toggle('sel', on); x.setAttribute('aria-selected', on); });
+    $$('.tab-panel').forEach((p) => (p.hidden = p.id !== `panel-${b.dataset.acctTab}`));
+  }));
+  bindCsActions(view);
 
   $$('.stage').forEach((b) => b.addEventListener('click', () => {
     if (b.classList.contains('current')) return;
@@ -515,7 +679,7 @@ async function renderAccount(id, query = new URLSearchParams()) {
     <p class="muted small">Saved as a note on the company in HubSpot.</p>`,
     'Save', (data) => api(`/api/accounts/${id}/notes`, { method: 'POST', body: data }).then(() => route({ keepScroll: true }))));
   if (query.get('note')) {
-    history.replaceState(null, '', `#/accounts/${id}`);
+    history.replaceState(null, '', `#/accounts/${id}?tab=overview`);
     $('#add-note').click();
   }
 }
@@ -725,6 +889,113 @@ async function simulateInbound(x) {
   location.hash = `#/inbox/${r.conversationId}`;
 }
 
+
+// ---------- my portfolio (CS) ----------
+async function renderPortfolio() {
+  const me = user();
+  state.pfScope ??= me.team === 'cs' ? 'mine' : 'all';
+  const all = (await api('/api/accounts')).filter((a) => a.status !== 'Prospect');
+  const list = all.filter((a) => state.pfScope === 'all' || a.csm === me.name);
+  const rank = { high: 0, medium: 1, low: 2 };
+  // Highest risk first; within a level, the sooner the renewal and the bigger the ARR, the higher.
+  list.sort((x, y) => rank[x.healthLevel] - rank[y.healthLevel] || (x.renewalDays ?? 999) - (y.renewalDays ?? 999) || y.deal.amount - x.deal.amount);
+  const atRisk = list.filter((a) => a.healthLevel !== 'low');
+  const anoms = list.reduce((n, a) => n + a.anomalies.length, 0);
+
+  view.innerHTML = `
+    <div class="page-head">
+      <div><h1>My portfolio</h1><p class="muted">Your accounts, riskiest first. Health combines usage trend, adoption, support load, platform stability and sentiment.</p></div>
+      <div class="row">
+        <div class="seg seg-inline" role="group" aria-label="Scope">
+          <button class="${state.pfScope === 'mine' ? 'sel' : ''}" data-scope="mine" aria-pressed="${state.pfScope === 'mine'}">My accounts</button>
+          <button class="${state.pfScope === 'all' ? 'sel' : ''}" data-scope="all" aria-pressed="${state.pfScope === 'all'}">All accounts</button>
+        </div>
+        <button class="btn" data-scan>❄ Check for anomalies</button>
+      </div>
+    </div>
+    <div class="kpis">
+      <div class="card kpi"><div class="muted small">ARR at risk</div><div class="v num tone-warn">${moneyCompact(atRisk.reduce((n, a) => n + a.deal.amount, 0))}</div><div class="muted xs">${atRisk.length} of ${list.length} accounts</div></div>
+      <div class="card kpi"><div class="muted small">High risk</div><div class="v num ${list.some((a) => a.healthLevel === 'high') ? 'tone-bad' : ''}">${list.filter((a) => a.healthLevel === 'high').length}</div></div>
+      <div class="card kpi"><div class="muted small">Usage anomalies to review</div><div class="v num ${anoms ? 'tone-warn' : ''}">${anoms}</div></div>
+      <div class="card kpi"><div class="muted small">Renewals in 90 days</div><div class="v num">${list.filter((a) => a.renewalDays != null && a.renewalDays <= 90).length}</div></div>
+    </div>
+    <div class="card table-wrap">
+      <table class="table pf-table">
+        <thead><tr><th>Account</th><th>Health</th><th>Why</th><th class="hide-sm">Usage (12 wks)</th><th class="hide-sm">Renewal</th><th class="hide-sm">Support</th><th class="hide-sm">Requests</th></tr></thead>
+        <tbody>${list.map((a) => {
+          const vol = a.usageSeries ? a.usageSeries.pos.map((v, i) => v + a.usageSeries.invoicesAi[i]) : null;
+          return `<tr data-href="#/accounts/${a.id}?tab=health">
+            <td><a class="row-link" href="#/accounts/${a.id}?tab=health">${esc(a.name)}</a> ${segBadge(a.segment)}<div class="muted xs">${esc(a.status)} · ${money(a.deal.amount)} ARR${state.pfScope === 'all' ? ` · CSM ${esc(a.csm)}` : ''}</div></td>
+            <td>${riskChip(a.healthLevel, a.health)}</td>
+            <td class="why">${a.anomalies.length ? `<div class="tone-warn small"><svg class="ico" style="width:14px;height:14px;vertical-align:-2px"><use href="#i-alert"/></svg> ${esc(a.anomalies[0].text)}</div>` : ''}${a.healthReasons.filter((r) => !r.startsWith('Usage anomaly')).slice(0, 2).map((r) => `<div class="muted small">${esc(r)}</div>`).join('') || (a.anomalies.length ? '' : '<span class="muted small">No warning signs</span>')}</td>
+            <td class="hide-sm"><div class="row" style="gap:8px;flex-wrap:nowrap">${vol ? sparkline(vol, { label: 'POs + AI invoices per week', w: 110, h: 30 }) : ''}<span class="small">${trendText(a.usageTrendPct)}</span></div></td>
+            <td class="hide-sm small">${a.renewalDays != null ? `<span class="${a.renewalDays <= 90 ? 'tone-warn' : ''}">in ${a.renewalDays} days</span>` : '–'}</td>
+            <td class="hide-sm small">${a.support.open ? `${a.support.open} open${a.support.escalated ? ` · <span class="tone-warn">${a.support.escalated} escalated</span>` : ''}` : '<span class="muted">none</span>'}</td>
+            <td class="hide-sm small">${a.featureRequests.toTell ? `<span class="tone-good">${a.featureRequests.toTell} shipped, tell them</span>` : a.featureRequests.open ? `${a.featureRequests.open} open` : '<span class="muted">–</span>'}</td>
+          </tr>`;
+        }).join('') || '<tr><td colspan="7" class="empty">No accounts in your portfolio.</td></tr>'}</tbody>
+      </table>
+    </div>`;
+  $$('tbody tr[data-href]').forEach((tr) => tr.addEventListener('click', (e) => { if (!e.target.closest('a, button')) location.hash = tr.dataset.href; }));
+  $$('[data-scope]').forEach((b) => b.addEventListener('click', () => { state.pfScope = b.dataset.scope; renderPortfolio(); }));
+  bindCsActions(view);
+}
+
+// ---------- feature requests ----------
+async function renderRequests() {
+  const me = user();
+  state.frScope ??= me.team === 'cs' ? 'mine' : 'all';
+  state.frStatus ??= 'active';
+  const all = await api('/api/feature-requests');
+  const scoped = all.filter((f) => state.frScope === 'all' || f.accounts.some((r) => r.csm === me.name));
+  const filters = [
+    ['active', 'Open', (f) => !['shipped', 'declined'].includes(f.status)],
+    ['shipped', 'Shipped', (f) => f.status === 'shipped'],
+    ['declined', 'Declined', (f) => f.status === 'declined'],
+    ['all', 'All', () => true],
+  ];
+  const test = filters.find((x) => x[0] === state.frStatus)[2];
+  const list = scoped.filter(test).sort((x, y) => y.arr - x.arr);
+  const toTell = scoped.flatMap((f) => (f.status === 'shipped' ? f.accounts.filter((r) => !r.notified && (state.frScope === 'all' || r.csm === me.name)) : []));
+
+  view.innerHTML = `
+    <div class="page-head">
+      <div><h1>Feature requests</h1><p class="muted">What customers asked for, where it stands in Jira, and who to tell when it ships. Ranked by the ARR asking.</p></div>
+      <div class="seg seg-inline" role="group" aria-label="Scope">
+        <button class="${state.frScope === 'mine' ? 'sel' : ''}" data-frscope="mine">My accounts</button>
+        <button class="${state.frScope === 'all' ? 'sel' : ''}" data-frscope="all">All accounts</button>
+      </div>
+    </div>
+    ${toTell.length ? `<div class="card callout"><svg class="ico"><use href="#i-bulb"/></svg><div class="grow"><b>${toTell.length} ${toTell.length === 1 ? 'customer is' : 'customers are'} waiting to hear</b> that their request shipped.</div><button class="btn sm" data-frfilter="shipped">Show shipped</button></div>` : ''}
+    <div class="filters" style="margin-bottom:12px">${filters.map(([id, label, t]) => `<span class="chip ${state.frStatus === id ? 'sel' : ''}" role="button" tabindex="0" data-frfilter="${id}">${label} · ${scoped.filter(t).length}</span>`).join('')}</div>
+    <div class="card">
+      ${list.map((f) => `
+        <div class="fr-item">
+          <div class="spread" style="align-items:flex-start">
+            <div class="grow">
+              <div style="font-weight:600">${esc(f.title)} <span class="mono muted xs">${esc(f.jiraKey)}</span></div>
+              <div class="muted xs">Updated ${rel(f.updatedAt)} · ${f.accounts.length} ${f.accounts.length === 1 ? 'account' : 'accounts'} · ${moneyCompact(f.arr)} ARR asking</div>
+            </div>
+            ${frStatus(f.status)}
+          </div>
+          <div class="fr-accounts">
+            ${f.accounts.map((r) => `<span class="fr-acct">
+              <a class="link small" href="#/accounts/${esc(r.accountId)}?tab=requests">${esc(r.name)}</a>${segBadge(r.segment)}
+              ${f.status === 'shipped' ? (r.notified ? '<span class="chip good">Told</span>' : `<button class="btn sm primary" data-tell="${esc(f.id)}" data-account="${esc(r.accountId)}">Tell the customer</button>`) : ''}
+            </span>`).join('')}
+            ${f.next ? `<button class="btn sm ghost fr-sim" data-advance="${esc(f.id)}" title="Demo: behaves like Jira's webhook when the issue moves">Simulate Jira update → ${esc(frLabel(f.next))}</button>` : ''}
+          </div>
+        </div>`).join('') || '<div class="empty">Nothing here.</div>'}
+    </div>`;
+  $$('[data-frscope]').forEach((b) => b.addEventListener('click', () => { state.frScope = b.dataset.frscope; renderRequests(); }));
+  $$('[data-frfilter]').forEach((b) => {
+    const pick = () => { state.frStatus = b.dataset.frfilter; renderRequests(); };
+    b.addEventListener('click', pick);
+    b.addEventListener('keydown', (e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), pick()));
+  });
+  bindCsActions(view);
+}
+
 // ---------- onboarding ----------
 async function renderOnboarding() {
   const list = (await api('/api/accounts')).filter((a) => a.onboarding);
@@ -875,7 +1146,8 @@ function renderConnections() {
       <h2 style="margin-bottom:6px">Inbound webhooks</h2>
       <p class="muted small" style="margin-bottom:10px">Point these at the hub. Signatures are verified when the secrets are set.</p>
       <pre class="code">POST ${esc(origin)}/webhooks/intercom   # Intercom: conversation.user.created, conversation.user.replied
-POST ${esc(origin)}/webhooks/slack      # Slack app → Interactivity request URL (approval buttons)</pre>
+POST ${esc(origin)}/webhooks/slack      # Slack app → Interactivity request URL (approval buttons)
+POST ${esc(origin)}/webhooks/jira       # Jira: issue updated (feature request status)</pre>
     </div>`;
   $('#reset').addEventListener('click', async (e) => {
     const btn = e.currentTarget;
@@ -901,12 +1173,13 @@ function openModal(html, submitLabel, onSubmit) {
 }
 
 function openTour() {
-  openModal(`<h2>Demo guide · 6 minutes</h2>
+  openModal(`<h2>Demo guide · 8 minutes</h2>
     <ol class="tour">
       <li><b>Good morning.</b> <a class="link" href="#/home">Start here</a>: each role lands on its own to-do list with one-click actions. Use <i>View as</i> to switch roles.</li>
       <li><b>Sales: close a deal.</b> <a class="link" href="#/accounts/harborline">Harborline</a> → <i>Closed won</i>. One click updates HubSpot, tells the team in Slack, opens a Jira epic and starts onboarding.</li>
       <li><b>Deal desk.</b> <a class="link" href="#/accounts/northgate">Northgate</a> → <i>Request discount</i> 20%. Then <a class="link" href="#/approvals">Approvals</a> → <i>Simulate Slack click</i>.</li>
       <li><b>Support.</b> As Ron, open the <a class="link" href="#/inbox">Inbox</a>: queues, the <i>Account snapshot</i>, <i>✨ Summarize &amp; draft reply</i>, then <i>Close</i> with a reason.</li>
+      <li><b>Customer Success.</b> As Dana, open <a class="link" href="#/portfolio">My portfolio</a>: accounts by risk. Open Meridian's <i>Health &amp; usage</i> tab, then <i>Check for anomalies</i>, and <a class="link" href="#/requests">Feature requests</a> → <i>Tell the customer</i>.</li>
       <li><b>Onboarding.</b> <a class="link" href="#/onboarding">Onboarding</a> → <i>Sync all from Snowflake</i>. Usage-based steps tick themselves off.</li>
       <li><b>Under the hood.</b> The <a class="link" href="#/log">Activity log</a> tells the story of every action in plain words.</li>
     </ol>`, null, null);
@@ -929,7 +1202,7 @@ function confirmDialog({ title, body = '', confirmLabel = 'Confirm', danger = fa
 const SHORTCUTS = [
   ['Ctrl K', 'Search accounts, conversations and pages'],
   ['/', 'Search'],
-  ['G then H', 'Good morning'], ['G then P', 'Pipeline'], ['G then I', 'Inbox'], ['G then O', 'Onboarding'], ['G then A', 'Accounts'], ['G then L', 'Activity log'],
+  ['G then H', 'Good morning'], ['G then P', 'Pipeline'], ['G then I', 'Inbox'], ['G then M', 'My portfolio'], ['G then O', 'Onboarding'], ['G then R', 'Feature requests'], ['G then A', 'Accounts'], ['G then L', 'Activity log'],
   ['J / K', 'Next / previous conversation (Inbox)'],
   ['?', 'This help'],
 ];
@@ -1000,7 +1273,7 @@ function toggleUserMenu(open) {
 // ---------- search (command palette) ----------
 const PAGES = [
   ['Good morning', '#/home', 'i-sun'], ['Pipeline', '#/pipeline', 'i-board'], ['Approvals', '#/approvals', 'i-check'], ['Inbox', '#/inbox', 'i-inbox'],
-  ['Onboarding', '#/onboarding', 'i-flag'], ['Accounts', '#/accounts', 'i-building'], ['Activity log', '#/log', 'i-activity'], ['Connections', '#/connections', 'i-plug'],
+  ['My portfolio', '#/portfolio', 'i-heart'], ['Onboarding', '#/onboarding', 'i-flag'], ['Feature requests', '#/requests', 'i-bulb'], ['Accounts', '#/accounts', 'i-building'], ['Activity log', '#/log', 'i-activity'], ['Connections', '#/connections', 'i-plug'],
 ];
 
 async function openPalette() {
@@ -1054,7 +1327,7 @@ function onKey(e) {
   if (e.key === 'Escape' && !$('#user-menu').hidden) { toggleUserMenu(false); $('#user-btn').focus(); return; }
   if (e.key.toLowerCase() === 'g') { gPending = Date.now(); return; }
   if (Date.now() - gPending < 1200) {
-    const dest = { h: '#/home', p: '#/pipeline', i: '#/inbox', o: '#/onboarding', a: '#/accounts', l: '#/log', c: '#/connections' }[e.key.toLowerCase()];
+    const dest = { h: '#/home', p: '#/pipeline', i: '#/inbox', o: '#/onboarding', a: '#/accounts', l: '#/log', c: '#/connections', m: '#/portfolio', r: '#/requests' }[e.key.toLowerCase()];
     gPending = 0;
     if (dest) { location.hash = dest; return; }
   }
@@ -1067,7 +1340,7 @@ function onKey(e) {
 }
 
 // ---------- router ----------
-const TITLES = { home: 'Good morning', pipeline: 'Pipeline', approvals: 'Approvals', inbox: 'Inbox', onboarding: 'Onboarding', accounts: 'Accounts', log: 'Activity log', connections: 'Connections' };
+const TITLES = { home: 'Good morning', pipeline: 'Pipeline', approvals: 'Approvals', inbox: 'Inbox', onboarding: 'Onboarding', portfolio: 'My portfolio', requests: 'Feature requests', accounts: 'Accounts', log: 'Activity log', connections: 'Connections' };
 let lastSection = null;
 
 async function route({ keepScroll = false } = {}) {
@@ -1092,6 +1365,8 @@ async function route({ keepScroll = false } = {}) {
     else if (section === 'accounts') await renderAccounts();
     else if (section === 'inbox') await renderInbox(id);
     else if (section === 'onboarding') await renderOnboarding();
+    else if (section === 'portfolio') await renderPortfolio();
+    else if (section === 'requests') await renderRequests();
     else if (section === 'approvals') await renderApprovals();
     else if (section === 'log') await renderLog(query);
     else if (section === 'connections') renderConnections();
@@ -1114,7 +1389,7 @@ async function init() {
   const sel = $('#user');
   sel.innerHTML = state.meta.users.map((u) => `<option value="${u.id}">${esc(u.name)} · ${esc(u.role)}</option>`).join('');
   try { const saved = localStorage.getItem('reeco-hub-user'); if (saved && state.meta.users.some((u) => u.id === saved)) sel.value = saved; } catch {}
-  sel.addEventListener('change', () => { try { localStorage.setItem('reeco-hub-user', sel.value); } catch {} renderUserChip(); route({ keepScroll: true }); });
+  sel.addEventListener('change', () => { try { localStorage.setItem('reeco-hub-user', sel.value); } catch {} renderUserChip(); refreshBadges(); route({ keepScroll: true }); });
   renderUserChip();
   if (!/Mac|iPhone|iPad/.test(navigator.platform)) $('#kbd-k').textContent = 'Ctrl K'; else $('#kbd-k').textContent = '⌘K';
 
