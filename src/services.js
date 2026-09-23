@@ -416,7 +416,7 @@ export async function ingestIntercom(payload) {
 
   const reasons = [];
   if (a.segment === 'Enterprise') reasons.push('Enterprise account');
-  if (isAngry(text)) reasons.push('negative sentiment');
+  if (isAngry(text)) reasons.push('Upset customer');
   if (reasons.length) {
     c.flagged = reasons;
     await postEscalation(a, c, `:warning: *Auto-flagged:* ${reasons.join(' + ')}`);

@@ -45,6 +45,29 @@ function slaChip(c) {
   if (mins < 0) return `<span class="chip bad" title="Past the response-time target">Reply overdue ${fmtMins(-mins)}</span>`;
   return `<span class="chip ${mins <= 30 ? 'warn' : ''}" title="Time left to reply within the target">Reply due in ${fmtMins(mins)}</span>`;
 }
+// How urgent a conversation is, in words: drives the colored status line and left edge.
+function urgency(c) {
+  if (c.state !== 'open' || !c.slaDueAt) return null;
+  const mins = Math.round((new Date(c.slaDueAt) - Date.now()) / 60000);
+  if (mins < 0) return { tone: 'bad', text: `Reply overdue ${fmtMins(-mins)}` };
+  return { tone: mins <= 30 ? 'warn' : 'calm', text: `Reply due in ${fmtMins(mins)}` };
+}
+const flagsOf = (c) => (c.state === 'open' ? (c.flagged ?? []).filter((f) => f !== 'Enterprise account') : []);
+const segBadge = (seg) => (seg === 'Enterprise' ? '<span class="seg-badge" title="Enterprise customer">Enterprise</span>' : '');
+
+function confirmEscalate() {
+  const vp = state.meta.people.vpSupport;
+  return confirmDialog({
+    title: 'Escalate to engineering?',
+    body: `<p class="muted" style="margin-bottom:8px">This will:</p><ul class="small plain-list">
+      <li>Open a high-priority bug in Jira with this conversation attached</li>
+      <li>Alert <b>#support-escalations</b> in Slack and notify <b>${esc(vp.name)} (${esc(vp.title)})</b></li>
+      <li>Leave an internal note in Intercom so the team sees it</li></ul>`,
+    confirmLabel: 'Escalate',
+    danger: true,
+  });
+}
+
 const fmtMins = (m) => (m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`);
 
 async function api(path, { method = 'GET', body } = {}) {
@@ -125,7 +148,7 @@ function ctaButton(c, primary) {
   if (!c) return '';
   const cls = `btn sm ${primary ? 'primary' : ''}`;
   if (c.kind === 'link') return `<a class="${cls}" href="${esc(c.href)}">${esc(c.label)}</a>`;
-  return `<button class="${cls}" data-endpoint="${esc(c.endpoint)}" data-body="${esc(c.body ? JSON.stringify(c.body) : '')}" data-done="${esc(c.done ?? '')}">${esc(c.label)}</button>`;
+  return `<button class="${cls}" data-endpoint="${esc(c.endpoint)}" data-body="${esc(c.body ? JSON.stringify(c.body) : '')}" data-confirm="${esc(c.confirm ?? '')}">${esc(c.label)}</button>`;
 }
 
 async function renderHome() {
@@ -156,7 +179,7 @@ async function renderHome() {
         <div class="gm-action p-${a.priority}">
           <span class="gm-ico" aria-hidden="true">${esc(a.icon)}</span>
           <div class="grow">
-            <div class="gm-title">${esc(a.title)}</div>
+            <div class="gm-title">${esc(a.title)} ${a.badge ? segBadge(a.badge) : ''}</div>
             <div class="muted small">${esc(a.detail)}</div>
             ${a.tags.length ? `<div class="row" style="margin-top:6px;gap:4px">${a.tags.map((t) => `<span class="chip ${esc(t.tone)}">${esc(t.text)}</span>`).join('')}</div>` : ''}
           </div>
@@ -164,10 +187,13 @@ async function renderHome() {
         </div>`).join('') || '<div class="empty">☕ Nothing needs you right now.</div>'}
     </div>`;
 
-  $$('[data-endpoint]').forEach((b) => b.addEventListener('click', () => run(b, async () => {
-    await api(b.dataset.endpoint, { method: 'POST', body: b.dataset.body ? JSON.parse(b.dataset.body) : undefined });
-    route({ keepScroll: true });
-  })));
+  $$('[data-endpoint]').forEach((b) => b.addEventListener('click', async () => {
+    if (b.dataset.confirm === 'escalate' && !(await confirmEscalate())) return;
+    run(b, async () => {
+      await api(b.dataset.endpoint, { method: 'POST', body: b.dataset.body ? JSON.parse(b.dataset.body) : undefined });
+      route({ keepScroll: true });
+    });
+  }));
 }
 
 // ---------- pipeline ----------
@@ -272,10 +298,7 @@ function conversationBlock(c) {
     ${c.state === 'open' ? `
       <form class="reply" data-conv="${esc(c.id)}" data-reason="${esc(c.ai?.category ?? '')}">
         <textarea class="input" name="text" rows="2" placeholder="Reply to customer (sent via Intercom)…" required></textarea>
-        <div class="actions">
-          <button class="btn primary sm" name="send">Send</button>
-          <button class="btn sm" name="close">Send &amp; close</button>
-        </div>
+        <button class="btn primary" name="send">Send</button>
       </form>` : `<div class="empty">Closed${c.closeReason ? ` as “${esc(reasonLabel(c.closeReason))}”` : ''}${c.closedBy ? ` by ${esc(c.closedBy)}` : ''}</div>`}`;
 }
 
@@ -299,13 +322,11 @@ function bindReplies(root) {
     e.preventDefault();
     const btn = e.submitter;
     const text = form.text.value;
-    const send = (reason) => run(btn, async () => {
-      await api(`/api/conversations/${form.dataset.conv}/reply`, { method: 'POST', body: { text, close: Boolean(reason), reason } });
+    run(btn, async () => {
+      await api(`/api/conversations/${form.dataset.conv}/reply`, { method: 'POST', body: { text } });
       form.reset();
       route({ keepScroll: true });
     });
-    if (btn?.name === 'close') pickCloseReason(form.dataset.reason, (reason) => send(reason));
-    else send();
   }));
 }
 
@@ -610,18 +631,17 @@ async function renderInbox(selectedId) {
         ${reasons ? `<div class="reasons-chart"><div class="muted xs" style="margin-bottom:6px">Why customers contacted us</div>
           ${reasons.filter((r) => r.count).sort((x, y) => y.count - x.count).map((r) => `<div class="rbar"><span class="xs ellipsis">${esc(r.label)}</span><div class="bar"><span style="width:${(r.count / maxReason) * 100}%"></span></div><span class="xs num">${r.count}</span></div>`).join('')}</div>` : ''}
         ${list.map((i) => `
-          <a class="inbox-item ${i.id === sel?.id ? 'active' : ''} ${i.id === state.flashId ? 'flash' : ''}" href="#/inbox/${esc(i.id)}">
-            <div class="spread"><strong class="ellipsis">${esc(i.account.name)}</strong><span class="muted xs" style="flex:none">${rel(i.updatedAt)}</span></div>
-            <div class="small ellipsis">${esc(i.subject)}</div>
+          <a class="inbox-item u-${urgency(i)?.tone ?? 'none'} ${i.id === sel?.id ? 'active' : ''} ${i.id === state.flashId ? 'flash' : ''}" href="#/inbox/${esc(i.id)}">
+            <div class="ii-top"><span class="ii-name ellipsis">${esc(i.account.name)}</span>${segBadge(i.account.segment)}</div>
+            <div class="ii-top"><span class="ii-subject ellipsis">${esc(i.subject)}</span><span class="ii-time muted xs">${rel(i.updatedAt)}</span></div>
             <div class="preview">${i.ai && i.ai.forMessages === i.messages.length ? `✨ ${esc(i.ai.summary)}` : esc(i.messages.at(-1)?.text)}</div>
-            <div class="row" style="margin-top:6px;gap:4px">
-              ${i.state === 'closed' ? `<span class="chip">${esc(reasonLabel(i.closeReason ?? '')) || 'Closed'}</span>` : ''}
-              ${isSnoozed(i) ? `<span class="chip info">Snoozed until ${new Date(i.snoozedUntil).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</span>` : ''}
-              ${slaChip(i)}
-              <span class="chip ${i.assignee ? '' : 'warn'}">${i.assignee ? esc(i.assignee.split(' ')[0]) : 'Unassigned'}</span>
-              ${i.account.segment === 'Enterprise' ? '<span class="chip brand">Enterprise</span>' : ''}
-              ${i.flagged?.length && i.state === 'open' ? '<span class="chip bad">Flagged</span>' : ''}
-              ${i.escalatedTo ? `<span class="chip info">${esc(i.escalatedTo)}</span>` : ''}
+            <div class="ii-status">
+              ${i.state === 'closed' ? `<span class="st muted"><svg class="ico"><use href="#i-done"/></svg>${esc(reasonLabel(i.closeReason ?? '')) || 'Closed'}</span>`
+                : isSnoozed(i) ? `<span class="st info"><svg class="ico"><use href="#i-clock"/></svg>Snoozed until ${new Date(i.snoozedUntil).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</span>`
+                : urgency(i) ? `<span class="st ${urgency(i).tone}"><svg class="ico"><use href="#i-clock"/></svg>${urgency(i).text}</span>` : '<span></span>'}
+              ${flagsOf(i).length ? `<span class="st bad" title="${esc(flagsOf(i).join(', '))}"><svg class="ico"><use href="#i-alert"/></svg>${esc(flagsOf(i)[0])}</span>` : ''}
+              ${i.escalatedTo ? `<span class="st info mono">${esc(i.escalatedTo)}</span>` : ''}
+              <span class="ii-owner ${i.assignee ? '' : 'none'}" title="${i.assignee ? `Owner: ${esc(i.assignee)}` : 'Nobody owns this yet'}">${i.assignee ? `<span class="avatar xs" aria-hidden="true">${initials(i.assignee)}</span>${esc(i.assignee.split(' ')[0])}` : 'Unassigned'}</span>
             </div>
           </a>`).join('') || `<div class="empty">${tab.id === 'mine' ? 'Nothing assigned to you. Check <b>Unassigned</b>.' : 'Nothing here.'}</div>`}
       </div>
@@ -629,7 +649,7 @@ async function renderInbox(selectedId) {
       <div class="inbox-thread">
         ${sel ? `
           <div class="card-head">
-            <div class="grow"><h2>${esc(sel.subject)}</h2><a class="link small" href="#/accounts/${sel.account.id}">${esc(sel.account.name)} →</a></div>
+            <div class="grow"><h2>${esc(sel.subject)}</h2><div class="row" style="gap:6px;margin-top:2px"><a class="link small" href="#/accounts/${sel.account.id}">${esc(sel.account.name)} →</a>${segBadge(sel.account.segment)}</div></div>
             ${src('intercom', `#${sel.id}`)}
           </div>
           ${sel.state === 'open' ? `
@@ -643,13 +663,16 @@ async function renderInbox(selectedId) {
             ${isSnoozed(sel) ? '<button class="btn sm" id="unsnooze">Unsnooze</button>'
               : `<select class="input sm" id="snooze" aria-label="Snooze"><option value="">Snooze…</option>${snoozeOptions().map(([l, d]) => `<option value="${d.toISOString()}">${l}</option>`).join('')}</select>`}
             <span class="grow"></span>
-            ${sel.escalatedTo ? `<span class="chip info">Escalated · ${esc(sel.escalatedTo)}</span>` : '<button class="btn sm" id="escalate">🚨 Escalate</button>'}
-            <button class="btn sm" id="close">✓ Close</button>
+            <div class="decide">
+              ${sel.escalatedTo ? `<span class="st info"><svg class="ico"><use href="#i-alert"/></svg>With engineering · ${esc(sel.escalatedTo)}</span>` : '<button class="btn sm btn-escalate" id="escalate"><svg class="ico"><use href="#i-alert"/></svg>Escalate to engineering</button>'}
+              <span class="vr" aria-hidden="true"></span>
+              <button class="btn sm btn-close" id="close"><svg class="ico"><use href="#i-done"/></svg>Close conversation</button>
+            </div>
           </div>` : ''}
           <div class="ctx">
-            ${slaChip(sel)}
+            ${urgency(sel) ? `<span class="st ${urgency(sel).tone}"><svg class="ico"><use href="#i-clock"/></svg>${urgency(sel).text}</span>` : ''}
             ${isSnoozed(sel) ? `<span class="chip info">Snoozed until ${new Date(sel.snoozedUntil).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })} (reply target still running)</span>` : ''}
-            ${(sel.flagged ?? []).map((f) => `<span class="chip bad">${esc(f)}</span>`).join('')}
+            ${flagsOf(sel).map((f) => `<span class="st bad"><svg class="ico"><use href="#i-alert"/></svg>${esc(f)}</span>`).join('')}
           </div>
           ${aiCard(sel)}
           ${conversationBlock(sel)}` : '<div class="empty">Select a conversation.</div>'}
@@ -670,8 +693,8 @@ async function renderInbox(selectedId) {
   $('#take')?.addEventListener('click', (e) => act(e.currentTarget, 'assign', { assignee: me.name }, 'Assigned to you'));
   $('#snooze')?.addEventListener('change', (e) => e.target.value && act(e.target, 'snooze', { until: e.target.value }, 'Snoozed. It comes back when the time is up or the customer replies.'));
   $('#unsnooze')?.addEventListener('click', (e) => act(e.currentTarget, 'snooze', { until: null }));
-  $('#escalate')?.addEventListener('click', (e) => act(e.currentTarget, 'escalate', null, 'Escalated: Jira bug, Slack #support-escalations, Intercom note'));
-  $('#close')?.addEventListener('click', (e) => pickCloseReason(sel.ai?.category, (reason) => act(e.currentTarget, 'close', { reason }, `Closed as “${reasonLabel(reason)}”`)));
+  $('#escalate')?.addEventListener('click', async (e) => { const btn = e.currentTarget; if (await confirmEscalate()) act(btn, 'escalate'); });
+  $('#close')?.addEventListener('click', (e) => { const btn = e.currentTarget; pickCloseReason(sel.ai?.category, (reason) => act(btn, 'close', { reason }, `Closed as “${reasonLabel(reason)}”`)); });
   $('#ai-run')?.addEventListener('click', (e) => act(e.currentTarget, 'ai'));
   $('#ai-use')?.addEventListener('click', () => {
     const ta = $('form.reply textarea');

@@ -130,7 +130,7 @@ function seedAccounts() {
         { key: 'SUP-2301', summary: 'Invoices duplicated in NetSuite after AP sync retry', status: 'In Progress', priority: 'Highest', createdAt: ago(30) },
       ],
       conversations: [
-        { id: '215469377', subject: 'Duplicate invoices in NetSuite', state: 'open', assignee: null, updatedAt: ago(0.8), slaDueAt: inH(0.2), flagged: ['Enterprise account', 'negative sentiment'], messages: [
+        { id: '215469377', subject: 'Duplicate invoices in NetSuite', state: 'open', assignee: null, updatedAt: ago(0.8), slaDueAt: inH(0.2), flagged: ['Enterprise account', 'Upset customer'], messages: [
           { from: 'customer', author: 'Greg Walsh', text: 'This is the third time this month invoices were pushed twice to NetSuite. Our AP team is reconciling by hand. This is unacceptable before renewal.', at: ago(0.8) },
         ] },
         closed('215467710', 'Duplicate invoices after sync retry', 'Greg Walsh', 'Ron A.', 'bug_workaround', 24 * 9,

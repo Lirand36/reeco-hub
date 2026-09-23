@@ -43,7 +43,7 @@ The same steps, with links, are in the app under the user menu (bottom-left) →
    - **Account snapshot** (right panel): health, ARR, CSM and AE, platform status from Snowflake (ERP, sync status, errors in 24h, app version), open Jira tickets, and past conversations with their close reasons.
    - **✨ AI assist:** one click gives a summary, the customer's mood, the likely category, a next step and a draft reply (Claude via the Anthropic API, or a rules-based stand-in in mock mode). **Use this reply** puts the draft in the reply box.
    - **Close with a reason:** closing always asks why (the AI's suggested category is preselected). The reason is tagged in Intercom and logged to Snowflake. The **Closed** tab charts why customers contact support.
-   - **Simulate inbound** (Enterprise, angry) is auto-flagged to `#support-escalations`; **Escalate** opens a Jira bug with an Intercom internal note and a Slack alert. SLA countdowns are 1h for Enterprise and 4h for everyone else, and a breach alerts Slack once.
+   - **Simulate inbound** (Enterprise, angry) is auto-flagged to `#support-escalations`; **Escalate to engineering** (red, and it asks first) opens a Jira bug with an Intercom internal note and a Slack alert; **Close conversation** is a separate button and always asks for a reason. The reply box only sends. SLA countdowns are 1h for Enterprise and 4h for everyone else, and a breach alerts Slack once.
 4. **Onboarding.** **Onboarding** → **Sync all from Snowflake**. Usage-based steps (vendors connected, first PO, first AI invoice) tick themselves off; the CSM ticks manual steps. When all six are done, go-live is announced.
 5. **Under the hood.** The **Activity log** tells the story of every action in plain words (for example "Ticket SUP-2311 escalated to engineering, and Moshe L. (VP Support) was notified"). Open a row to see each step, and "Technical details" for the exact request and response.
 
@@ -59,7 +59,7 @@ The same steps, with links, are in the app under the user menu (bottom-left) →
 - Discounts above **15%** need Sales Manager approval.
 - Close reasons: Platform bug (fixed / workaround), ERP / integration, How-to, Feature request, Account / billing, No response.
 - SLA: **Enterprise 1h**, Mid-market and Independent **4h**.
-- Auto-flag to Slack: any Enterprise message, or negative-sentiment keywords.
+- Auto-flag to Slack: any Enterprise message, or an upset customer (keyword match).
 - Onboarding steps: vendors connected (auto), catalog & pricing, accounting/ERP integration, staff trained, first PO (auto), first AI-processed invoice (auto).
 
 ## Architecture

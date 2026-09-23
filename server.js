@@ -12,7 +12,7 @@ import * as intercom from './src/connectors/intercom.js';
 import * as slack from './src/connectors/slack.js';
 import * as snowflake from './src/connectors/snowflake.js';
 import * as claude from './src/connectors/claude.js';
-import { CLOSE_REASONS, CONFIG, DEAL_STAGES, ONBOARDING_STEPS, USERS, db, reset } from './src/store.js';
+import { CLOSE_REASONS, CONFIG, DEAL_STAGES, ONBOARDING_STEPS, PEOPLE, USERS, db, reset } from './src/store.js';
 import * as svc from './src/services.js';
 import { goodMorning } from './src/home.js';
 import { withActivity, announce, getActivities, clearActivities, setActor } from './src/activity.js';
@@ -90,7 +90,7 @@ const integrations = () => [
 
 const routes = [
   ['GET', /^\/api\/meta$/, () => ({
-    stages: DEAL_STAGES, users: USERS, config: CONFIG, integrations: integrations(), closeReasons: CLOSE_REASONS,
+    stages: DEAL_STAGES, users: USERS, people: PEOPLE, config: CONFIG, integrations: integrations(), closeReasons: CLOSE_REASONS,
     steps: ONBOARDING_STEPS.map(({ id, label, auto, hint }) => ({ id, label, auto: Boolean(auto), hint })),
   })],
   ['GET', /^\/api\/home$/, (req) => goodMorning(actorOf(req))],

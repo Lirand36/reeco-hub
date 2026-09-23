@@ -38,16 +38,16 @@ function support(user) {
       id: `reply-${c.id}`, priority, icon: c.assignee ? '✉' : '📥', sort: m ?? 9999,
       title: c.assignee ? `Reply to ${last.author} at ${a.name}` : `Unassigned: ${last.author} at ${a.name}`,
       detail: c.ai && c.ai.forMessages === c.messages.length ? `✨ ${c.ai.summary}` : `“${last.text.length > 120 ? last.text.slice(0, 117) + '…' : last.text}”`,
+      badge: a.segment === 'Enterprise' ? 'Enterprise' : null,
       tags: [
         m == null ? null : m < 0 ? { text: `Reply overdue ${fmtMins(-m)}`, tone: 'bad' } : { text: `Reply due in ${fmtMins(m)}`, tone: m <= 30 ? 'warn' : '' },
-        a.segment === 'Enterprise' ? { text: 'Enterprise', tone: 'brand' } : null,
         ...(c.flagged ?? []).filter((f) => f !== 'Enterprise account').map((f) => ({ text: f, tone: 'bad' })),
         c.escalatedTo ? { text: c.escalatedTo, tone: 'info' } : null,
       ].filter(Boolean),
       cta: link('Reply now', `#/inbox/${c.id}`),
       secondary: !c.assignee
         ? call('Assign to me', `/api/conversations/${c.id}/assign`, { assignee: user.name }, 'Assigned to you in Intercom')
-        : flagged ? call('Escalate to engineering', `/api/conversations/${c.id}/escalate`, null, 'Escalated to Jira + Slack') : null,
+        : flagged ? { ...call('Escalate to engineering', `/api/conversations/${c.id}/escalate`, null, 'Escalated to Jira + Slack'), confirm: 'escalate' } : null,
     };
   });
 
