@@ -6,10 +6,11 @@ const token = () => process.env.HUBSPOT_TOKEN;
 export const isLive = () => Boolean(token());
 const auth = () => ({ Authorization: `Bearer ${token()}` });
 
-export function updateDeal(dealId, properties, action = 'Update deal') {
+export function updateDeal(dealId, properties, action = 'Update deal', summary = 'Updated the deal') {
   return send({
     system: 'hubspot',
     action,
+    summary,
     method: 'PATCH',
     url: `${BASE}/crm/v3/objects/deals/${dealId}`,
     headers: auth(),
@@ -24,6 +25,7 @@ export function createNote(companyId, text) {
   return send({
     system: 'hubspot',
     action: 'Create note',
+    summary: 'Saved the note on the company',
     method: 'POST',
     url: `${BASE}/crm/v3/objects/notes`,
     headers: auth(),

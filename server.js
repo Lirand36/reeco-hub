@@ -15,6 +15,7 @@ import * as claude from './src/connectors/claude.js';
 import { CLOSE_REASONS, CONFIG, DEAL_STAGES, ONBOARDING_STEPS, USERS, db, reset } from './src/store.js';
 import * as svc from './src/services.js';
 import { goodMorning } from './src/home.js';
+import { withActivity, announce, getActivities, clearActivities, setActor } from './src/activity.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 const PUBLIC_DIR = fileURLToPath(new URL('./public/', import.meta.url));
@@ -104,6 +105,11 @@ const routes = [
       .sort((x, y) => (y.state === 'open') - (x.state === 'open') || y.updatedAt.localeCompare(x.updatedAt))],
   ['GET', /^\/api\/approvals$/, () => db.approvals.map((p) => ({ ...p, account: summary(db.accounts.find((a) => a.id === p.accountId)) }))],
   ['GET', /^\/api\/log$/, () => getLog()],
+  // Activity log: one row per user action, with the plain-language steps it caused
+  ['GET', /^\/api\/activity$/, () => {
+    const steps = getLog();
+    return getActivities().map((a) => ({ ...a, steps: steps.filter((e) => e.activityId === a.id).reverse() }));
+  }],
   // Why customers contact support: close reasons across all conversations (Snowflake-backed in production)
   ['GET', /^\/api\/support\/reasons$/, () => {
     const counts = Object.fromEntries(CLOSE_REASONS.map((r) => [r.id, 0]));
@@ -120,7 +126,9 @@ const routes = [
     const ids = db.accounts.filter((a) => a.status === 'Onboarding').map((a) => a.id);
     const results = [];
     for (const id of ids) results.push(await svc.syncUsage(id, actorOf(req).name));
-    return { ticked: results.flatMap((r) => r.ticked.map((t) => `${r.account.name}: ${t}`)) };
+    const ticked = results.flatMap((r) => r.ticked.map((t) => `${r.account.name}: ${t}`));
+    announce(ticked.length ? `Usage synced. Completed automatically: ${ticked.join('; ')}.` : 'Usage synced. No new onboarding milestones yet.', { icon: ticked.length ? '✓' : '↻', tone: ticked.length ? 'good' : 'info' });
+    return { ticked };
   }],
   ['POST', /^\/api\/accounts\/([\w-]+)\/steps\/(\w+)$/, (req, [id, step]) => svc.toggleStep(id, step, actorOf(req).name)],
   ['POST', /^\/api\/conversations\/([\w-]+)\/reply$/, (req, [id], b) => svc.reply(id, b.text, actorOf(req).name, { close: Boolean(b.close), reason: b.reason })],
@@ -137,7 +145,9 @@ const routes = [
   ['POST', /^\/api\/reset$/, () => {
     reset();
     clearLog();
+    clearActivities();
     bus.emit('changed', { reset: true });
+    announce('Demo data reset. Everything is back to the starting point.', { icon: '↺', tone: 'info' });
     return { ok: true };
   }],
 ];
@@ -159,6 +169,7 @@ async function handleWebhook(req, res, source) {
     const allowed = (process.env.SLACK_APPROVER_IDS || '').split(',').map((x) => x.trim()).filter(Boolean);
     if (allowed.length && !allowed.includes(payload.user?.id)) throw new svc.HttpError(403, 'Not an approver');
     const who = payload.user?.name || USERS.find((u) => u.approver).name;
+    setActor(`${who} (in Slack)`);
     const decision = action.action_id === 'discount_approve' ? 'approved' : 'rejected';
     const result = await svc.decideApproval(action.value, decision, who, 'slack');
     return json(res, 200, { ok: true, status: result.approval.status });
@@ -169,7 +180,7 @@ async function handleWebhook(req, res, source) {
 function sse(req, res) {
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
   res.write(': connected\n\n');
-  const handlers = Object.fromEntries(['integration', 'inbound', 'changed'].map((type) => [type, (data) => res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`)]));
+  const handlers = Object.fromEntries(['integration', 'inbound', 'changed', 'activity'].map((type) => [type, (data) => res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`)]));
   for (const [t, h] of Object.entries(handlers)) bus.on(t, h);
   const ping = setInterval(() => res.write(': ping\n\n'), 25000);
   req.on('close', () => {
@@ -196,13 +207,14 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/events') return sse(req, res);
     if (pathname === '/healthz') return json(res, 200, { ok: true });
     const hook = pathname.match(/^\/webhooks\/(\w+)/);
-    if (hook && req.method === 'POST') return await handleWebhook(req, res, hook[1]);
+    if (hook && req.method === 'POST') return await withActivity(hook[1] === 'slack' ? 'Slack' : 'Intercom', () => handleWebhook(req, res, hook[1]));
 
     for (const [method, pattern, handler] of routes) {
       const m = pathname.match(pattern);
       if (!m || req.method !== method) continue;
       const body = method === 'POST' ? parseJson(await readRaw(req)) : undefined;
-      return json(res, 200, await handler(req, m.slice(1), body));
+      const run = () => handler(req, m.slice(1), body);
+      return json(res, 200, await (method === 'POST' ? withActivity(actorOf(req).name, run) : run()));
     }
     if (req.method === 'GET' && !pathname.startsWith('/api/')) return serveStatic(pathname, res);
     json(res, 404, { error: 'Not found' });

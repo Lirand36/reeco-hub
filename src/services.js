@@ -8,7 +8,8 @@ import * as slack from './connectors/slack.js';
 import * as snowflake from './connectors/snowflake.js';
 import * as claude from './connectors/claude.js';
 import { bus } from './bus.js';
-import { CLOSE_REASONS, CONFIG, DEAL_STAGES, ONBOARDING_STEPS, USERS, db, findAccount, findAccountByEmail, findConversation } from './store.js';
+import { announce, withActivity } from './activity.js';
+import { CLOSE_REASONS, CONFIG, DEAL_STAGES, ONBOARDING_STEPS, PEOPLE, USERS, db, findAccount, findAccountByEmail, findConversation } from './store.js';
 
 export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -25,8 +26,13 @@ function getAccount(id) {
   return a;
 }
 
+const SYSTEM_NAMES = { hubspot: 'HubSpot', jira: 'Jira', intercom: 'Intercom', slack: 'Slack', snowflake: 'Snowflake', claude: 'Claude' };
+const first = (name) => String(name).split(' ')[0];
+const stageLabel = (id) => DEAL_STAGES.find((x) => x.id === id)?.label ?? id;
+
+// A failed call stops the action; the user gets a plain explanation instead of an HTTP status.
 function failIfRejected(entry) {
-  if (!entry.ok) throw new HttpError(502, `${entry.system} returned ${entry.status}`);
+  if (!entry.ok) throw new HttpError(502, `${SYSTEM_NAMES[entry.system] ?? entry.system} didn't respond, so nothing was changed. Please try again in a minute.`);
 }
 
 const changed = (accountId) => bus.emit('changed', { accountId });
@@ -41,10 +47,11 @@ export async function changeDealStage(accountId, stage, actor) {
   const pending = db.approvals.find((p) => p.accountId === a.id && p.status === 'pending');
   need(!(stage === 'closedwon' && pending), 409, 'A discount approval is still pending for this deal');
 
-  failIfRejected(await hubspot.updateDeal(a.deal.id, { dealstage: stage }, 'Update deal stage'));
+  failIfRejected(await hubspot.updateDeal(a.deal.id, { dealstage: stage }, 'Update deal stage', `Moved the deal to “${stageLabel(stage)}”`));
   const from = a.deal.stage;
   a.deal.stage = stage;
   await track('deal.stage_changed', a.id, actor, { from, to: stage });
+  announce(stage === 'closedlost' ? `${a.name} marked as lost.` : `${a.name} moved to ${stageLabel(stage)}.`, { icon: stage === 'closedlost' ? '•' : '→', accountId: a.id });
 
   if (stage === 'closedwon') await kickOffOnboarding(a, actor);
   changed(a.id);
@@ -72,7 +79,7 @@ async function kickOffOnboarding(a, actor) {
     slack.section(`:rocket: *Onboarding kickoff: ${a.name}*\nCSM *${a.csm}* · Jira epic *${epic.response?.key ?? 'n/a'}*`),
     slack.section(ONBOARDING_STEPS.map((s) => `☐ ${s.label}`).join('\n')),
     slack.context(`Steps marked auto are ticked from Snowflake usage. <${hubUrl(`/accounts/${a.id}`)}|Track in Reeco Hub>`),
-  ], 'Kickoff checklist');
+  ], 'Kickoff checklist', `#${channelName}`);
 
   a.status = 'Onboarding';
   a.health = 70;
@@ -85,6 +92,7 @@ async function kickOffOnboarding(a, actor) {
   };
   if (epic.ok) a.tickets.unshift({ key: epic.response.key, summary: `Onboarding: ${a.name}`, status: 'To Do', priority: 'High', createdAt: now() });
   await track('onboarding.started', a.id, actor, { jiraEpic: epic.response?.key, slackChannel: channelName });
+  announce(`${a.name} is a customer! The team was told in #deals, and ${a.csm} has an onboarding plan and a #${channelName} channel ready.`, { icon: '🎉', accountId: a.id });
 }
 
 export async function requestDiscount(accountId, { pct, reason }, actor) {
@@ -94,9 +102,10 @@ export async function requestDiscount(accountId, { pct, reason }, actor) {
   need(!db.approvals.some((p) => p.accountId === a.id && p.status === 'pending'), 409, 'There is already a pending request for this deal');
 
   if (pct <= CONFIG.discountApprovalThreshold) {
-    failIfRejected(await hubspot.updateDeal(a.deal.id, { discount_pct: String(pct) }, 'Apply discount'));
+    failIfRejected(await hubspot.updateDeal(a.deal.id, { discount_pct: String(pct) }, 'Apply discount', `Saved the ${pct}% discount on the deal`));
     a.deal.discountPct = pct;
     await track('discount.applied', a.id, actor, { pct });
+    announce(`${pct}% discount applied to ${a.name}'s deal.`, { icon: '%', accountId: a.id });
     changed(a.id);
     return { account: a, approvalNeeded: false };
   }
@@ -107,6 +116,8 @@ export async function requestDiscount(accountId, { pct, reason }, actor) {
   approval.slack = { channel: msg.response.channel, ts: msg.response.ts };
   db.approvals.unshift(approval);
   await track('discount.requested', a.id, actor, { pct, approvalId: approval.id });
+  const approver = USERS.find((u) => u.approver);
+  announce(`Discount request sent. ${approver.name} (${approver.role}) will approve or reject ${pct}% off for ${a.name}.`, { icon: '⏳', tone: 'info', accountId: a.id });
   changed(a.id);
   return { account: a, approvalNeeded: true, approval };
 }
@@ -132,7 +143,7 @@ export async function decideApproval(approvalId, decision, actor, via = 'hub') {
   const a = getAccount(p.accountId);
 
   if (decision === 'approved') {
-    failIfRejected(await hubspot.updateDeal(a.deal.id, { discount_pct: String(p.pct) }, 'Apply approved discount'));
+    failIfRejected(await hubspot.updateDeal(a.deal.id, { discount_pct: String(p.pct) }, 'Apply approved discount', `Saved the approved ${p.pct}% discount on the deal`));
     a.deal.discountPct = p.pct;
   }
   Object.assign(p, { status: decision, decidedBy: actor, decidedAt: now(), via });
@@ -143,6 +154,9 @@ export async function decideApproval(approvalId, decision, actor, via = 'hub') {
     slack.context(`Requested by ${p.requestedBy} · decided ${via === 'slack' ? 'in Slack' : 'in Reeco Hub'}`),
   ]);
   await track(`discount.${decision}`, a.id, actor, { pct: p.pct, approvalId: p.id, via });
+  announce(decision === 'approved'
+    ? `Approved: ${a.name} gets ${p.pct}% off. ${p.requestedBy} can close the deal.`
+    : `Rejected: no ${p.pct}% discount for ${a.name}. ${p.requestedBy} was let know.`, { icon: decision === 'approved' ? '✓' : '✕', tone: decision === 'approved' ? 'good' : '', accountId: a.id });
   changed(a.id);
   return { approval: p };
 }
@@ -153,6 +167,7 @@ export async function addNote(accountId, text, actor) {
   failIfRejected(await hubspot.createNote(a.hubspotCompanyId, `${text.trim()}\n— ${actor}`));
   a.notes.unshift({ text: text.trim(), author: actor, at: now() });
   await track('note.added', a.id, actor, {});
+  announce(`Note saved to ${a.name}.`, { icon: '✎', accountId: a.id });
   changed(a.id);
   return { account: a };
 }
@@ -171,6 +186,7 @@ export async function openTicket(accountId, { summary, description, priority }, 
   failIfRejected(entry);
   a.tickets.unshift({ key: entry.response.key, summary: summary.trim(), status: 'To Do', priority: priority || 'Medium', createdAt: now() });
   await track('ticket.created', a.id, actor, { key: entry.response.key });
+  announce(`New Jira ticket ${entry.response.key} opened for ${a.name}.`, { icon: '🎫', accountId: a.id });
   changed(a.id);
   return { account: a, key: entry.response.key };
 }
@@ -190,7 +206,10 @@ async function closeWithReason(a, c, reason, actor) {
   failIfRejected(await intercom.close(c.id));
   Object.assign(c, { state: 'closed', closeReason: reason, closedAt: now(), closedBy: actor, snoozedUntil: null, slaDueAt: null });
   await track('conversation.closed', a.id, actor, { conversationId: c.id, reason });
+  announce(`Conversation with ${first(customerOf(c))} at ${a.name} closed as “${reasonLabel(reason)}”.`, { icon: '✓', accountId: a.id });
 }
+
+const customerOf = (c) => c.messages.find((m) => m.from === 'customer')?.author ?? 'the customer';
 
 export async function reply(conversationId, text, actor, { close = false, reason } = {}) {
   const { account: a, conversation: c } = getConversation(conversationId);
@@ -201,8 +220,13 @@ export async function reply(conversationId, text, actor, { close = false, reason
   c.updatedAt = now();
   c.slaDueAt = null; // answered
   if (!c.assignee) await assign(c.id, actor, actor, { quiet: true }); // replying takes ownership
-  if (close) await closeWithReason(a, c, reason, actor);
-  else await track('conversation.replied', a.id, actor, { conversationId: c.id });
+  if (close) {
+    await closeWithReason(a, c, reason, actor);
+    announce(`Reply sent to ${first(customerOf(c))}, and the conversation was closed as “${reasonLabel(reason)}”.`, { icon: '✉', accountId: a.id });
+  } else {
+    await track('conversation.replied', a.id, actor, { conversationId: c.id });
+    announce(`Reply sent to ${first(customerOf(c))} at ${a.name}.`, { icon: '✉', accountId: a.id });
+  }
   changed(a.id);
   return { conversation: c };
 }
@@ -219,9 +243,14 @@ export async function assign(conversationId, assigneeName, actor, { quiet = fals
   const { account: a, conversation: c } = getConversation(conversationId);
   const u = assigneeName ? USERS.find((x) => x.name === assigneeName && x.team === 'support') : null;
   need(!assigneeName || u, 400, 'Can only assign to a support agent');
-  failIfRejected(await intercom.assign(c.id, u?.intercomAdminId ?? null));
+  failIfRejected(await intercom.assign(c.id, u?.intercomAdminId ?? null, u?.name));
   c.assignee = u?.name ?? null;
   await track(u ? 'conversation.assigned' : 'conversation.unassigned', a.id, actor, { conversationId: c.id, assignee: c.assignee });
+  if (!quiet) {
+    announce(!u ? `${first(customerOf(c))}'s conversation is back in the unassigned queue.`
+      : u.name === actor ? `${first(customerOf(c))} at ${a.name} is now yours.`
+      : `${first(customerOf(c))}'s conversation assigned to ${u.name}.`, { icon: '👤', accountId: a.id });
+  }
   if (!quiet) changed(a.id);
   return { conversation: c };
 }
@@ -232,11 +261,14 @@ export async function snooze(conversationId, until, actor) {
     failIfRejected(await intercom.reopen(c.id));
     c.snoozedUntil = null;
     await track('conversation.unsnoozed', a.id, actor, { conversationId: c.id });
+    announce(`${first(customerOf(c))}'s conversation is back in the queue.`, { icon: '⏰', accountId: a.id });
   } else {
     need(new Date(until) > new Date(), 400, 'Snooze time must be in the future');
     failIfRejected(await intercom.snooze(c.id, until));
     c.snoozedUntil = new Date(until).toISOString();
     await track('conversation.snoozed', a.id, actor, { conversationId: c.id, until: c.snoozedUntil });
+    const hours = Math.round((new Date(until) - Date.now()) / 3600_000);
+    announce(`Snoozed ${hours >= 12 ? 'until tomorrow' : `for ${hours} hour${hours === 1 ? '' : 's'}`}. It comes back sooner if ${first(customerOf(c))} replies.`, { icon: '💤', tone: 'info', accountId: a.id });
   }
   changed(a.id);
   return { conversation: c };
@@ -310,6 +342,7 @@ export async function aiAssist(conversationId, actor) {
   });
   c.ai = { ...out, forMessages: c.messages.length, at: now() };
   await track('ai.assist', a.id, actor, { conversationId: c.id, mode: out.mode });
+  announce(`Summary and a draft reply are ready for ${first(customerOf(c))}'s conversation.`, { icon: '✨', accountId: a.id });
   changed(a.id);
   return { ai: c.ai };
 }
@@ -337,14 +370,18 @@ export async function escalate(conversationId, actor) {
   c.escalatedTo = key;
   a.tickets.unshift({ key, summary: c.subject, status: 'To Do', priority: a.segment === 'Enterprise' ? 'Highest' : 'High', createdAt: now() });
   await track('conversation.escalated', a.id, actor, { conversationId: c.id, jira: key });
+  const vp = PEOPLE.vpSupport;
+  announce(`Ticket ${key} escalated to engineering, and ${vp.name} (${vp.title}) was notified.`, { icon: '🚨', accountId: a.id });
   changed(a.id);
   return { conversation: c, key };
 }
 
+// Escalation alerts go to #support-escalations and tag the VP Support so nothing sits unseen.
 function postEscalation(a, c, headline) {
   const last = c.messages.filter((m) => m.from === 'customer').at(-1);
+  const vp = PEOPLE.vpSupport;
   return slack.postMessage(slack.channels().support, `${a.name}: ${c.subject}`, [
-    slack.section(`${headline}\n*${a.name}* · ${a.segment} · ${money(a.deal.amount)} ARR · health ${a.health ?? 'n/a'}`),
+    slack.section(`${headline}\n*${a.name}* · ${a.segment} · ${money(a.deal.amount)} ARR · health ${a.health ?? 'n/a'}\ncc <@${vp.slackId}> (${vp.title})`),
     slack.section(`> ${last?.text ?? ''}`),
     slack.context(`<${hubUrl(`/inbox/${c.id}`)}|Open in Reeco Hub>`),
   ], 'Escalation');
@@ -385,6 +422,10 @@ export async function ingestIntercom(payload) {
     await postEscalation(a, c, `:warning: *Auto-flagged:* ${reasons.join(' + ')}`);
   }
   await track('conversation.inbound', a.id, 'intercom', { conversationId: c.id, flagged: reasons });
+  const who = `${first(a.contact.name)} at ${a.name}`;
+  announce(reasons.length
+    ? `New message from ${who}. Flagged as ${reasons.join(' and ').toLowerCase()}, and ${PEOPLE.vpSupport.name} (${PEOPLE.vpSupport.title}) was notified.`
+    : `New message from ${who}.`, { icon: reasons.length ? '⚠' : '✉', tone: reasons.length ? 'warn' : 'info', accountId: a.id });
   bus.emit('inbound', { accountId: a.id, accountName: a.name, conversation: c, flagged: reasons });
   changed(a.id);
   return { ok: true, conversationId: c.id, flagged: reasons };
@@ -396,8 +437,11 @@ export async function checkSla() {
     for (const c of a.conversations) {
       if (c.state !== 'open' || !c.slaDueAt || c.slaAlerted || new Date(c.slaDueAt) > new Date()) continue;
       c.slaAlerted = true;
-      await postEscalation(a, c, `:alarm_clock: *SLA breached* (${CONFIG.slaHours[a.segment]}h target, ${a.segment})`);
-      await track('sla.breached', a.id, 'system', { conversationId: c.id });
+      await withActivity('Reeco Hub', async () => {
+        await postEscalation(a, c, `:alarm_clock: *SLA breached* (${CONFIG.slaHours[a.segment]}h target, ${a.segment})`);
+        await track('sla.breached', a.id, 'system', { conversationId: c.id });
+        announce(`${first(customerOf(c))} at ${a.name} has waited longer than the ${CONFIG.slaHours[a.segment]}h target. ${PEOPLE.vpSupport.name} (${PEOPLE.vpSupport.title}) was notified.`, { icon: '⏰', tone: 'bad', accountId: a.id });
+      });
       changed(a.id);
     }
   }
@@ -445,7 +489,12 @@ export async function syncUsage(accountId, actor) {
       await slack.postMessage(a.onboarding.slackChannel, `${a.name}: ${ticked.join(', ')}`,
         [slack.section(`:white_check_mark: *Auto-completed from usage data:* ${ticked.join(', ')}`)], 'Onboarding progress');
     }
+    announce(ticked.length
+      ? `${a.name}: ${ticked.join(' and ')} completed automatically from usage data.`
+      : `${a.name}'s usage is up to date. No new milestones yet.`, { icon: ticked.length ? '✓' : '↻', tone: ticked.length ? 'good' : 'info', accountId: a.id });
     await maybeGoLive(a, actor);
+  } else {
+    announce(`${a.name}'s usage is up to date.`, { icon: '↻', tone: 'info', accountId: a.id });
   }
   changed(a.id);
   return { account: a, ticked };
@@ -464,6 +513,7 @@ export async function toggleStep(accountId, stepId, actor) {
       [slack.section(`:white_check_mark: *${def.label}* marked done by ${actor}`)], 'Onboarding progress');
   }
   await track(cur.done ? 'onboarding.step_reopened' : 'onboarding.step_done', a.id, actor, { step: stepId });
+  announce(cur.done ? `“${def.label}” reopened for ${a.name}.` : `“${def.label}” done for ${a.name}. The team was updated in ${a.onboarding.slackChannel}.`, { icon: cur.done ? '↺' : '✓', accountId: a.id });
   await maybeGoLive(a, actor);
   changed(a.id);
   return { account: a };
@@ -478,4 +528,5 @@ async function maybeGoLive(a, actor) {
     slack.context(`CSM: ${a.csm}`),
   ], 'Go-live');
   await track('onboarding.completed', a.id, actor, {});
+  announce(`${a.name} finished onboarding and is live! The team was told in #deals.`, { icon: '🏁', accountId: a.id });
 }

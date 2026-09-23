@@ -336,6 +336,34 @@ pre.draft { max-height: 150px; overflow-y: auto; white-space: pre-wrap; font: in
   .inbox3 .inbox-list { max-height: 300px; border-right: 0; border-bottom: 1px solid var(--border); }
 }
 
+/* ---------- friendly toasts & activity log ---------- */
+.toast.t-good { --dot: var(--brand); }
+.toast.t-info { --dot: var(--info); }
+.toast.t-warn { --dot: var(--warn); }
+.toast.t-bad { --dot: var(--bad); }
+.t-body { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; }
+.t-ico { font-size: 16px; line-height: 1.3; }
+.t-more { display: inline-block; margin: 4px 0 0 26px; }
+.act { border-bottom: 1px solid var(--border); }
+.act:last-child { border-bottom: 0; }
+.act > summary { display: flex; gap: 12px; align-items: center; padding: 12px 18px; cursor: pointer; list-style: none; }
+.act > summary::-webkit-details-marker { display: none; }
+.act > summary:hover { background: var(--surface-2); }
+.act-ico { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--brand-soft); font-size: 14px; }
+.act-ico.t-info { background: var(--info-soft); }
+.act-ico.t-warn { background: var(--warn-soft); }
+.act-ico.t-bad { background: var(--bad-soft); }
+.act-text { display: block; font-weight: 500; }
+.act-sys { display: flex; gap: 4px; }
+.sysdot { width: 9px; height: 9px; border-radius: 50%; }
+.act-steps { list-style: none; margin: 0; padding: 4px 18px 14px 62px; display: flex; flex-direction: column; gap: 8px; }
+.act-steps li { display: flex; gap: 10px; font-size: 13.5px; }
+.step-mark { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; flex: none; margin-top: 1px; background: var(--good-soft); color: var(--good); }
+.step-mark.err { background: var(--bad-soft); color: var(--bad); }
+.tech > summary { cursor: pointer; margin-top: 2px; }
+.tech .log-body { padding: 0; }
+@media (max-width: 760px) { .act-steps { padding-left: 18px; } }
+
 /* ---------- responsive ---------- */
 @media (max-width: 1080px) {
   .detail-grid, .inbox { grid-template-columns: minmax(0, 1fr); }

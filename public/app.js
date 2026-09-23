@@ -57,9 +57,9 @@ async function api(path, { method = 'GET', body } = {}) {
   return data;
 }
 
-function toast(html, { system, error, ms = 5000 } = {}) {
+function toast(html, { system, error, tone, ms = 5000 } = {}) {
   const el = document.createElement('div');
-  el.className = `toast ${system ?? ''} ${error ? 'error' : ''}`;
+  el.className = `toast ${system ?? ''} ${tone ? `t-${tone}` : ''} ${error ? 'error' : ''}`;
   el.innerHTML = html;
   const box = $('#toasts');
   box.append(el);
@@ -90,21 +90,17 @@ function scheduleRender() {
 
 function connectEvents() {
   const es = new EventSource('/api/events');
-  es.addEventListener('integration', (e) => {
+  // Raw system calls aren't shown to users; they only refresh the activity log if it's open.
+  es.addEventListener('integration', () => { if (location.hash.startsWith('#/log')) scheduleRender(); });
+  es.addEventListener('activity', (e) => {
     const x = JSON.parse(e.data);
-    state.log.unshift(x);
-    toast(`<div class="spread"><strong>${esc(SYSTEMS[x.system]?.name)}</strong><span class="mono ${x.ok ? 'ok' : 'err'}">${x.status} · ${x.durationMs}ms</span></div>
-      <div class="ellipsis">${esc(x.action)}</div>
-      <div class="mono muted ellipsis">${esc(x.request.method)} ${esc(new URL(x.request.url).pathname)}</div>`, { system: x.system });
+    const byOther = x.actor && x.actor !== user().name;
+    toast(`<div class="t-body"><span class="t-ico" aria-hidden="true">${esc(x.icon)}</span>
+      <div><div>${esc(x.text)}</div>${byOther ? `<div class="muted xs">by ${esc(x.actor)}</div>` : ''}</div></div>
+      <a class="link xs t-more" href="#/log?open=${esc(x.id)}">Details</a>`, { tone: x.tone || 'good', ms: 6000 });
   });
-  es.addEventListener('inbound', (e) => {
-    const x = JSON.parse(e.data);
-    state.flashId = x.conversation.id;
-    toast(`<strong>New message</strong> from ${esc(x.accountName)}${x.flagged.length ? ` <span class="chip bad">${esc(x.flagged.join(' + '))}</span>` : ''}
-      <div class="muted">${esc(x.conversation.messages.at(-1).text)}</div>`, { system: 'intercom', ms: 7000 });
-  });
-  es.addEventListener('changed', (e) => {
-    if (JSON.parse(e.data).reset) state.log = [];
+  es.addEventListener('inbound', (e) => { state.flashId = JSON.parse(e.data).conversation.id; });
+  es.addEventListener('changed', () => {
     refreshBadges();
     scheduleRender();
   });
@@ -170,7 +166,6 @@ async function renderHome() {
   }));
   $$('[data-endpoint]').forEach((b) => b.addEventListener('click', () => run(b, async () => {
     await api(b.dataset.endpoint, { method: 'POST', body: b.dataset.body ? JSON.parse(b.dataset.body) : undefined });
-    if (b.dataset.done) toast(esc(b.dataset.done));
     route({ keepScroll: true });
   })));
 }
@@ -419,7 +414,6 @@ async function renderAccount(id, query = new URLSearchParams()) {
     const won = b.dataset.stage === 'closedwon';
     const go = () => run(b, async () => {
       await api(`/api/accounts/${id}/deal-stage`, { method: 'POST', body: { stage: b.dataset.stage } });
-      if (won) toast('<strong>Automation ran:</strong> #deals announcement, onboarding Slack channel, Jira epic, Snowflake events.', { ms: 7000 });
       route({ keepScroll: true });
     });
     if (!won) return go();
@@ -439,8 +433,7 @@ async function renderAccount(id, query = new URLSearchParams()) {
     <div class="field"><label for="reason">Reason</label><textarea class="input" id="reason" name="reason" rows="3" placeholder="Why does this deal need it?"></textarea></div>
     <p class="muted small">Up to ${state.meta.config.discountApprovalThreshold}% is applied in HubSpot right away. Above that, a manager approves it in Slack <span class="mono">#deal-desk</span>.</p>`,
     'Submit', async (data) => {
-      const r = await api(`/api/accounts/${id}/discount`, { method: 'POST', body: data });
-      toast(r.approvalNeeded ? 'Sent to <span class="mono">#deal-desk</span> for approval' : `Discount applied in HubSpot`);
+      await api(`/api/accounts/${id}/discount`, { method: 'POST', body: data });
       route({ keepScroll: true });
     }));
 
@@ -450,8 +443,7 @@ async function renderAccount(id, query = new URLSearchParams()) {
   })));
 
   $('#sync')?.addEventListener('click', (e) => run(e.currentTarget, async () => {
-    const r = await api(`/api/accounts/${id}/sync-usage`, { method: 'POST' });
-    toast(r.ticked.length ? `<strong>Auto-completed:</strong> ${esc(r.ticked.join(', '))}` : 'Usage refreshed from Snowflake', { system: 'snowflake' });
+    await api(`/api/accounts/${id}/sync-usage`, { method: 'POST' });
     route({ keepScroll: true });
   }));
 
@@ -642,7 +634,6 @@ async function renderInbox(selectedId) {
   if (!sel) return;
   const act = (btn, path, body, msg) => run(btn, async () => {
     await api(`/api/conversations/${sel.id}/${path}`, { method: 'POST', body });
-    if (msg) toast(msg);
     route({ keepScroll: true });
   });
   $('#assignee')?.addEventListener('change', (e) => act(e.target, 'assign', { assignee: e.target.value || null }));
@@ -697,9 +688,7 @@ async function renderOnboarding() {
     <h2 style="margin-bottom:10px">Live · ${done.length}</h2>
     <div class="onb-grid">${done.map(card).join('')}</div>`;
   $('#sync-all')?.addEventListener('click', (e) => run(e.currentTarget, async () => {
-    const results = await Promise.all(active.map((a) => api(`/api/accounts/${a.id}/sync-usage`, { method: 'POST' })));
-    const ticked = results.flatMap((r) => r.ticked.map((t) => `${r.account.name}: ${t}`));
-    toast(ticked.length ? `<strong>Auto-completed</strong><br>${ticked.map(esc).join('<br>')}` : 'Usage refreshed, no new milestones', { system: 'snowflake', ms: 7000 });
+    await api('/api/onboarding/sync', { method: 'POST' });
     route({ keepScroll: true });
   }));
 }
@@ -745,39 +734,59 @@ async function renderApprovals() {
     const payload = { type: 'block_actions', user: { id: 'U0EITAN', name: 'Eitan B.' }, actions: [{ action_id: 'discount_approve', value: b.dataset.slack }] };
     const res = await fetch('/webhooks/slack', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ payload: JSON.stringify(payload) }) });
     if (!res.ok) throw new Error((await res.json()).error);
-    toast('Approved from Slack. HubSpot updated.', { system: 'slack' });
     route({ keepScroll: true });
   })));
 }
 
-// ---------- integration log ----------
-function renderLog() {
-  const rows = state.log.filter((r) => !state.logFilter || r.system === state.logFilter);
+// ---------- activity log ----------
+state.openActs = new Set();
+
+async function renderLog(query = new URLSearchParams()) {
+  if (query.get('open')) { state.openActs.add(query.get('open')); history.replaceState(null, '', '#/log'); }
+  const all = await api('/api/activity');
+  const systemsOf = (a) => [...new Set(a.steps.map((x) => x.system))];
+  const rows = all.filter((a) => !state.logFilter || systemsOf(a).includes(state.logFilter));
+  const toneOf = (a) => (a.failed || a.steps.some((x) => !x.ok) ? 'bad' : a.tone);
+
   view.innerHTML = `
     <div class="page-head">
-      <div><h1>Integration log</h1><p class="muted">Every call the hub made to external systems: exact request, response, status, latency. Secrets are redacted.</p></div>
+      <div><h1>Activity log</h1><p class="muted">Everything the hub did for the team, in plain words. Open a row to see each step it took in HubSpot, Intercom, Jira, Slack, Snowflake or Claude.</p></div>
       <div class="filters">
-        <span class="chip ${!state.logFilter ? 'sel' : ''}" data-f="" role="button" tabindex="0">All · ${state.log.length}</span>
-        ${Object.entries(SYSTEMS).map(([k, s]) => `<span class="chip ${state.logFilter === k ? 'sel' : ''}" data-f="${k}" role="button" tabindex="0">${s.name} · ${state.log.filter((r) => r.system === k).length}</span>`).join('')}
+        <span class="chip ${!state.logFilter ? 'sel' : ''}" data-f="" role="button" tabindex="0">All · ${all.length}</span>
+        ${Object.entries(SYSTEMS).map(([k, x]) => { const n = all.filter((a) => systemsOf(a).includes(k)).length; return n ? `<span class="chip ${state.logFilter === k ? 'sel' : ''}" data-f="${k}" role="button" tabindex="0">${x.name} · ${n}</span>` : ''; }).join('')}
       </div>
     </div>
     <div class="card">
-      ${rows.map((r) => `
-        <details class="log-row">
+      ${rows.map((a) => `
+        <details class="act" data-id="${a.id}" ${state.openActs.has(a.id) ? 'open' : ''}>
           <summary>
-            <span class="xs muted num hide-sm">${new Date(r.ts).toLocaleTimeString('en-US', { hour12: false })}</span>
-            ${src(r.system)}
-            <span class="small ellipsis"><strong>${esc(r.action)}</strong> <span class="mono muted">${esc(r.request.method)} ${esc(r.request.url)}</span></span>
-            <span class="chip hide-sm">${r.mode === 'live' ? 'LIVE' : 'MOCK'}</span>
-            <span class="mono ${r.ok ? 'ok' : 'err'}">${r.status}</span>
-            <span class="mono muted hide-sm">${r.durationMs}ms</span>
+            <span class="act-ico t-${toneOf(a)}" aria-hidden="true">${esc(a.icon)}</span>
+            <span class="grow">
+              <span class="act-text">${esc(a.outcome)}</span>
+              <span class="muted xs">${esc(a.actor)} · ${rel(a.ts)}${a.steps.length ? ` · ${a.steps.length} ${a.steps.length === 1 ? 'step' : 'steps'}` : ''}</span>
+            </span>
+            <span class="act-sys hide-sm">${systemsOf(a).map((k) => `<span class="sysdot" style="background:${SYSTEMS[k]?.color}" title="${esc(SYSTEMS[k]?.name)}"></span>`).join('')}</span>
           </summary>
-          <div class="log-body">
-            <div><div class="muted xs" style="margin-bottom:4px">Request</div><pre class="code">${esc(`${r.request.method} ${r.request.url}\n${JSON.stringify(r.request.headers, null, 2)}\n\n${JSON.stringify(r.request.body ?? null, null, 2)}`)}</pre></div>
-            <div><div class="muted xs" style="margin-bottom:4px">Response</div><pre class="code">${esc(JSON.stringify(r.response, null, 2))}</pre></div>
-          </div>
-        </details>`).join('') || '<div class="empty">No calls yet. Try closing a deal or escalating a conversation.</div>'}
+          <ol class="act-steps">
+            ${a.steps.map((x) => `
+              <li>
+                <span class="step-mark ${x.ok ? 'ok' : 'err'}" aria-label="${x.ok ? 'Done' : 'Failed'}">${x.ok ? '✓' : '✕'}</span>
+                <div class="grow">
+                  <div><b>${esc(SYSTEMS[x.system]?.name ?? x.system)}</b> · ${esc(x.summary)}</div>
+                  <details class="tech"><summary class="xs muted">Technical details</summary>
+                    <div class="xs muted" style="margin:6px 0">${x.mode === 'live' ? 'Live' : 'Mock mode (nothing left the server)'} · ${x.status} · ${x.durationMs} ms</div>
+                    <div class="log-body">
+                      <div><div class="muted xs" style="margin-bottom:4px">Sent</div><pre class="code">${esc(`${x.request.method} ${x.request.url}\n\n${JSON.stringify(x.request.body ?? null, null, 2)}`)}</pre></div>
+                      <div><div class="muted xs" style="margin-bottom:4px">Received</div><pre class="code">${esc(JSON.stringify(x.response, null, 2))}</pre></div>
+                    </div>
+                  </details>
+                </div>
+              </li>`).join('') || '<li class="muted small">No outside systems were involved.</li>'}
+          </ol>
+        </details>`).join('') || '<div class="empty">Nothing yet. Try closing a deal or escalating a conversation.</div>'}
     </div>`;
+
+  $$('details.act').forEach((d) => d.addEventListener('toggle', () => (d.open ? state.openActs.add(d.dataset.id) : state.openActs.delete(d.dataset.id))));
   $$('[data-f]').forEach((c) => {
     const pick = () => { state.logFilter = c.dataset.f || null; renderLog(); };
     c.addEventListener('click', pick);
@@ -810,7 +819,6 @@ POST ${esc(origin)}/webhooks/slack      # Slack app → Interactivity request UR
     </div>`;
   $('#reset').addEventListener('click', (e) => run(e.currentTarget, async () => {
     await api('/api/reset', { method: 'POST' });
-    toast('Demo data reset');
   }));
 }
 
@@ -838,7 +846,7 @@ function openTour() {
       <li><b>Deal desk.</b> <a class="link" href="#/accounts/northgate">Northgate</a> → <i>Request discount</i> 20%. Then <a class="link" href="#/approvals">Approvals</a> → <i>Simulate Slack click</i>.</li>
       <li><b>Support.</b> As Ron, open the <a class="link" href="#/inbox">Inbox</a>: <i>Mine</i> / <i>Unassigned</i> queues, and the <i>Account snapshot</i> on the right (platform, ERP sync, tickets, history). Click <i>✨ Summarize &amp; draft reply</i>, use the draft, then <i>Close</i> and pick a reason. The <i>Closed</i> tab shows why customers contact support.</li>
       <li><b>Onboarding.</b> <a class="link" href="#/onboarding">Onboarding</a> → <i>Sync all from Snowflake</i>. Usage-based steps tick themselves off, and a go-live gets announced.</li>
-      <li><b>Under the hood.</b> <a class="link" href="#/log">Integration log</a> shows every exact API request and response.</li>
+      <li><b>Under the hood.</b> The <a class="link" href="#/log">Activity log</a> tells the story of every action in plain words, with the exact API calls one click away.</li>
     </ol>`, null, null);
   $$('#modal a').forEach((a) => a.addEventListener('click', () => $('#modal').close()));
 }
@@ -858,7 +866,7 @@ async function route({ keepScroll = false } = {}) {
     else if (section === 'inbox') await renderInbox(id);
     else if (section === 'onboarding') await renderOnboarding();
     else if (section === 'approvals') await renderApprovals();
-    else if (section === 'log') renderLog();
+    else if (section === 'log') await renderLog(query);
     else if (section === 'connections') renderConnections();
     else if (section === 'pipeline') await renderPipeline();
     else await renderHome();
@@ -869,7 +877,7 @@ async function route({ keepScroll = false } = {}) {
 }
 
 async function init() {
-  [state.meta, state.log] = await Promise.all([fetch('/api/meta').then((r) => r.json()), fetch('/api/log').then((r) => r.json())]);
+  state.meta = await fetch('/api/meta').then((r) => r.json());
   const sel = $('#user');
   sel.innerHTML = state.meta.users.map((u) => `<option value="${u.id}">${esc(u.name)} · ${esc(u.role)}</option>`).join('');
   try { const saved = localStorage.getItem('reeco-hub-user'); if (saved && state.meta.users.some((u) => u.id === saved)) sel.value = saved; } catch {}

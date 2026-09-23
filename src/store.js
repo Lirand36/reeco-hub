@@ -39,6 +39,11 @@ export const CLOSE_REASONS = [
   { id: 'no_response', label: 'No response / duplicate' },
 ];
 
+// People the hub notifies but who don't log in to the demo.
+export const PEOPLE = {
+  vpSupport: { name: 'Moshe L.', title: 'VP Support', slackId: 'U04MOSHEL' },
+};
+
 export const USERS = [
   { id: 'maya', name: 'Maya K.', role: 'Account Executive', team: 'sales' },
   { id: 'eitan', name: 'Eitan B.', role: 'Sales Manager', team: 'sales', approver: true },

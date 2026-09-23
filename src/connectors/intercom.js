@@ -6,10 +6,11 @@ export const isLive = () => Boolean(process.env.INTERCOM_TOKEN && process.env.IN
 const headers = () => ({ Authorization: `Bearer ${process.env.INTERCOM_TOKEN}`, 'Intercom-Version': '2.11' });
 const adminId = () => process.env.INTERCOM_ADMIN_ID || 'ADMIN_ID';
 
-function part(conversationId, action, body, state) {
+function part(conversationId, action, body, state, summary) {
   return send({
     system: 'intercom',
     action,
+    summary,
     method: 'POST',
     url: `${BASE}/conversations/${conversationId}/${body.message_type === 'close' ? 'parts' : 'reply'}`,
     headers: headers(),
@@ -20,20 +21,21 @@ function part(conversationId, action, body, state) {
 }
 
 export const reply = (id, text) =>
-  part(id, 'Reply to customer', { message_type: 'comment', type: 'admin', admin_id: adminId(), body: text }, 'open');
+  part(id, 'Reply to customer', { message_type: 'comment', type: 'admin', admin_id: adminId(), body: text }, 'open', 'Sent the reply to the customer');
 
 // Internal note: visible to the team inside Intercom, not to the customer
 export const note = (id, text) =>
-  part(id, 'Add internal note', { message_type: 'note', type: 'admin', admin_id: adminId(), body: text }, 'open');
+  part(id, 'Add internal note', { message_type: 'note', type: 'admin', admin_id: adminId(), body: text }, 'open', 'Left an internal note for the team');
 
 export const close = (id) =>
-  part(id, 'Close conversation', { message_type: 'close', type: 'admin', admin_id: adminId() }, 'closed');
+  part(id, 'Close conversation', { message_type: 'close', type: 'admin', admin_id: adminId() }, 'closed', 'Closed the conversation');
 
 // POST /conversations/{id}/parts handles assignment, snooze and reopen as well.
-function manage(id, action, body, mock) {
+function manage(id, action, body, mock, summary) {
   return send({
     system: 'intercom',
     action,
+    summary,
     method: 'POST',
     url: `${BASE}/conversations/${id}/parts`,
     headers: headers(),
@@ -43,13 +45,14 @@ function manage(id, action, body, mock) {
   });
 }
 
-export const assign = (id, assigneeId) =>
-  manage(id, assigneeId ? 'Assign conversation' : 'Unassign conversation', { message_type: 'assignment', assignee_id: assigneeId ?? '0' }, { admin_assignee_id: assigneeId ?? null });
+export const assign = (id, assigneeId, name) =>
+  manage(id, assigneeId ? 'Assign conversation' : 'Unassign conversation', { message_type: 'assignment', assignee_id: assigneeId ?? '0' }, { admin_assignee_id: assigneeId ?? null },
+    assigneeId ? `Assigned the conversation to ${name}` : 'Moved the conversation back to the unassigned queue');
 
 export const snooze = (id, untilIso) =>
-  manage(id, 'Snooze conversation', { message_type: 'snoozed', snoozed_until: Math.floor(new Date(untilIso) / 1000) }, { state: 'snoozed' });
+  manage(id, 'Snooze conversation', { message_type: 'snoozed', snoozed_until: Math.floor(new Date(untilIso) / 1000) }, { state: 'snoozed' }, 'Snoozed the conversation');
 
-export const reopen = (id) => manage(id, 'Reopen conversation', { message_type: 'open' }, { state: 'open' });
+export const reopen = (id) => manage(id, 'Reopen conversation', { message_type: 'open' }, { state: 'open' }, 'Brought the conversation back from snooze');
 
 // Tags must exist in Intercom; map reason → tag id via INTERCOM_TAG_IDS (JSON), e.g. {"bug_fixed":"7351002"}
 export function tag(id, reasonId, label) {
@@ -58,6 +61,7 @@ export function tag(id, reasonId, label) {
   return send({
     system: 'intercom',
     action: `Tag conversation: ${label}`,
+    summary: `Tagged the conversation “${label}”`,
     method: 'POST',
     url: `${BASE}/conversations/${id}/tags`,
     headers: headers(),

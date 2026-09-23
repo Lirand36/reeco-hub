@@ -14,10 +14,12 @@ export const channels = () => ({
 
 const fakeTs = () => `${Math.floor(Date.now() / 1000)}.${String(Math.floor(Math.random() * 1e6)).padStart(6, '0')}`;
 
-export function postMessage(channel, text, blocks, action = 'Post message') {
+// `where` is a readable channel name for the activity log when `channel` is an ID.
+export function postMessage(channel, text, blocks, action = 'Post message', where = channel) {
   return send({
     system: 'slack',
-    action: `${action} → ${channel}`,
+    action: `${action} → ${where}`,
+    summary: `Posted in ${where}: “${text}”`,
     method: 'POST',
     url: `${BASE}/chat.postMessage`,
     headers: auth(),
@@ -31,6 +33,7 @@ export function updateMessage(channel, ts, text, blocks) {
   return send({
     system: 'slack',
     action: 'Update message',
+    summary: `Updated the Slack message: “${text}”`,
     method: 'POST',
     url: `${BASE}/chat.update`,
     headers: auth(),
@@ -44,6 +47,7 @@ export function createChannel(name) {
   return send({
     system: 'slack',
     action: `Create channel #${name}`,
+    summary: `Created the Slack channel #${name}`,
     method: 'POST',
     url: `${BASE}/conversations.create`,
     headers: auth(),

@@ -21,7 +21,7 @@ npm start           # Node 22+
 # → http://localhost:3000
 ```
 
-Everything runs in **mock mode** by default: each request is built exactly as the real API expects, shown in the Integration log, and answered with a realistic fake response. To connect a real sandbox, copy `.env.example` to `.env` and fill in that system's credentials. Each system goes live on its own.
+Everything runs in **mock mode** by default: each request is built exactly as the real API expects, shown in the Activity log (under "Technical details"), and answered with a realistic fake response. To connect a real sandbox, copy `.env.example` to `.env` and fill in that system's credentials. Each system goes live on its own.
 
 ## Deploy to Render (shareable link)
 
@@ -45,7 +45,7 @@ The **▶ Demo guide** button in the app has the same steps with links.
    - **Close with a reason:** closing always asks why (the AI's suggested category is preselected). The reason is tagged in Intercom and logged to Snowflake. The **Closed** tab charts why customers contact support.
    - **Simulate inbound** (Enterprise, angry) is auto-flagged to `#support-escalations`; **Escalate** opens a Jira bug with an Intercom internal note and a Slack alert. SLA countdowns are 1h for Enterprise and 4h for everyone else, and a breach alerts Slack once.
 4. **Onboarding.** **Onboarding** → **Sync all from Snowflake**. Usage-based steps (vendors connected, first PO, first AI invoice) tick themselves off; the CSM ticks manual steps. When all six are done, go-live is announced.
-5. **Under the hood.** **Integration log** shows every exact request and response.
+5. **Under the hood.** The **Activity log** tells the story of every action in plain words (for example "Ticket SUP-2311 escalated to engineering, and Moshe L. (VP Support) was notified"). Open a row to see each step, and "Technical details" for the exact request and response.
 
 ## Rules (in `src/store.js → CONFIG`)
 
@@ -69,6 +69,7 @@ services.js ── business actions & automations ("what happens when a deal clo
 connectors/ ── hubspot · intercom · jira · slack · snowflake · claude
    │
 http.js ────── single outbound gateway: logging, timing, secret redaction, mock/live switch
+activity.js ── groups each user action's calls and writes the one plain-language outcome users see
 ```
 
 To add a system (e.g. NetSuite, Sage Intacct, Gong), add a file in `src/connectors/` and call it from `services.js`.

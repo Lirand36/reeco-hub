@@ -16,11 +16,12 @@ export const isLive = () => Boolean(cfg().account && cfg().token);
 const bindings = (values) =>
   Object.fromEntries(values.map((v, i) => [String(i + 1), { type: typeof v === 'number' ? 'FIXED' : 'TEXT', value: String(v) }]));
 
-function statement(action, sql, values, mockRows) {
+function statement(action, sql, values, mockRows, summary) {
   const c = cfg();
   return send({
     system: 'snowflake',
     action,
+    summary,
     method: 'POST',
     url: `https://${c.account || 'reeco'}.snowflakecomputing.com/api/v2/statements`,
     headers: { Authorization: `Bearer ${c.token}`, 'X-Snowflake-Authorization-Token-Type': c.tokenType },
@@ -56,7 +57,8 @@ export function queryUsage(hubspotCompanyId, mockRow) {
       ORDER BY snapshot_date DESC
       LIMIT 1`,
     [hubspotCompanyId],
-    () => [mockRow()]
+    () => [mockRow()],
+    'Pulled the latest product usage and platform status'
   );
 }
 
@@ -65,6 +67,7 @@ export function trackEvent(event, accountId, actor, props = {}) {
     `Log event ${event}`,
     'INSERT INTO GTM.HUB_EVENTS (event, account_id, actor, props, occurred_at) SELECT ?, ?, ?, PARSE_JSON(?), CURRENT_TIMESTAMP()',
     [event, accountId ?? '', actor ?? 'system', JSON.stringify(props)],
-    []
+    [],
+    'Recorded it for reporting'
   );
 }

@@ -47,6 +47,7 @@ export async function assist({ context, transcript, agentName, categories, mock 
   const entry = await record({
     system: 'claude',
     action: 'Summarize & draft reply',
+    summary: 'Read the conversation and drafted a reply',
     live: isLive(),
     request: { method: 'POST', url: 'https://api.anthropic.com/v1/messages', headers: { 'x-api-key': '••••••', 'anthropic-beta': params.betas.join(',') }, body: { ...params, system: SYSTEM.slice(0, 120) + '…' } },
     run: async () => {

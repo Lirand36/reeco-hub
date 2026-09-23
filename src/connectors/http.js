@@ -4,6 +4,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { bus } from '../bus.js';
+import { current } from '../activity.js';
 
 const MAX_LOG = 300;
 let log = [];
@@ -20,7 +21,7 @@ function redact(headers = {}) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-export async function send({ system, action, method, url, headers = {}, body, live, mockResponse }) {
+export async function send({ system, action, summary, method, url, headers = {}, body, live, mockResponse }) {
   const entry = {
     id: randomUUID(),
     ts: new Date().toISOString(),
@@ -28,6 +29,7 @@ export async function send({ system, action, method, url, headers = {}, body, li
     action,
     mode: live ? 'live' : 'mock',
     request: { method, url, headers: redact(headers), body },
+    activityId: current()?.id,
   };
   const started = Date.now();
 
@@ -56,16 +58,23 @@ export async function send({ system, action, method, url, headers = {}, body, li
     entry.response = typeof mockResponse === 'function' ? mockResponse() : mockResponse ?? { ok: true };
   }
 
-  entry.durationMs = Date.now() - started;
-  log.unshift(entry);
-  if (log.length > MAX_LOG) log.pop();
-  bus.emit('integration', entry);
+  finish(entry, started, summary);
   return entry;
 }
 
+// Plain-language line for the activity log, e.g. "Opened ticket SUP-2311". May depend on the response.
+function finish(entry, started, summary) {
+  entry.durationMs = Date.now() - started;
+  const text = typeof summary === 'function' ? (entry.ok ? summary(entry.response) : null) : summary;
+  entry.summary = entry.ok ? (text ?? entry.action) : `Couldn't complete: ${text ?? entry.action}`;
+  log.unshift(entry);
+  if (log.length > MAX_LOG) log.pop();
+  bus.emit('integration', { id: entry.id, activityId: entry.activityId });
+}
+
 // For integrations called through an SDK rather than fetch: same logging, timing and streaming.
-export async function record({ system, action, request, live, run, mockResponse }) {
-  const entry = { id: randomUUID(), ts: new Date().toISOString(), system, action, mode: live ? 'live' : 'mock', request };
+export async function record({ system, action, summary, request, live, run, mockResponse }) {
+  const entry = { id: randomUUID(), ts: new Date().toISOString(), system, action, mode: live ? 'live' : 'mock', request, activityId: current()?.id };
   const started = Date.now();
   try {
     if (live) {
@@ -81,10 +90,7 @@ export async function record({ system, action, request, live, run, mockResponse 
     entry.ok = false;
     entry.response = { error: err.message };
   }
-  entry.durationMs = Date.now() - started;
-  log.unshift(entry);
-  if (log.length > MAX_LOG) log.pop();
-  bus.emit('integration', entry);
+  finish(entry, started, summary);
   return entry;
 }
 
