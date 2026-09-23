@@ -116,6 +116,64 @@ async function refreshBadges() {
   set('#badge-approvals', approvals.filter((p) => p.status === 'pending').length);
 }
 
+// ---------- good morning ----------
+function ctaButton(c, primary) {
+  if (!c) return '';
+  const cls = `btn sm ${primary ? 'primary' : ''}`;
+  if (c.kind === 'link') return `<a class="${cls}" href="${esc(c.href)}">${esc(c.label)}</a>`;
+  return `<button class="${cls}" data-endpoint="${esc(c.endpoint)}" data-body="${esc(c.body ? JSON.stringify(c.body) : '')}" data-done="${esc(c.done ?? '')}">${esc(c.label)}</button>`;
+}
+
+async function renderHome() {
+  const d = await api('/api/home');
+  const first = d.user.name.split(' ')[0];
+  const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+
+  view.innerHTML = `
+    <section class="gm-hero">
+      <div class="grow">
+        <div class="muted small">${today}</div>
+        <h1>Good morning, ${esc(first)} <span aria-hidden="true">☀</span></h1>
+        <p class="gm-summary">${esc(d.summary)}</p>
+      </div>
+      <div class="gm-switch" role="group" aria-label="View as">
+        <span class="muted xs">View as</span>
+        ${state.meta.users.map((u) => `<button class="chip ${u.id === d.user.id ? 'sel' : ''}" data-as="${u.id}" aria-pressed="${u.id === d.user.id}">${esc(u.role)}</button>`).join('')}
+      </div>
+    </section>
+
+    <div class="kpis">
+      ${d.kpis.map((k) => `<div class="card kpi"><div class="muted small">${esc(k.label)}</div><div class="v num ${k.tone ? `tone-${k.tone}` : ''}">${esc(k.value)}</div></div>`).join('')}
+    </div>
+
+    <div class="spread" style="margin-bottom:10px">
+      <h2>Your next best actions <span class="muted" style="font-weight:500">· ${d.actions.length}</span></h2>
+      ${ctaButton(d.footer)}
+    </div>
+    <div class="card">
+      ${d.actions.map((a) => `
+        <div class="gm-action p-${a.priority}">
+          <span class="gm-ico" aria-hidden="true">${esc(a.icon)}</span>
+          <div class="grow">
+            <div class="gm-title">${esc(a.title)}</div>
+            <div class="muted small">${esc(a.detail)}</div>
+            ${a.tags.length ? `<div class="row" style="margin-top:6px;gap:4px">${a.tags.map((t) => `<span class="chip ${esc(t.tone)}">${esc(t.text)}</span>`).join('')}</div>` : ''}
+          </div>
+          <div class="gm-ctas">${ctaButton(a.secondary)}${ctaButton(a.cta, true)}</div>
+        </div>`).join('') || '<div class="empty">☕ Nothing needs you right now.</div>'}
+    </div>`;
+
+  $$('[data-as]').forEach((b) => b.addEventListener('click', () => {
+    $('#user').value = b.dataset.as;
+    $('#user').dispatchEvent(new Event('change'));
+  }));
+  $$('[data-endpoint]').forEach((b) => b.addEventListener('click', () => run(b, async () => {
+    await api(b.dataset.endpoint, { method: 'POST', body: b.dataset.body ? JSON.parse(b.dataset.body) : undefined });
+    if (b.dataset.done) toast(esc(b.dataset.done));
+    route({ keepScroll: true });
+  })));
+}
+
 // ---------- pipeline ----------
 async function renderPipeline() {
   const accounts = await api('/api/accounts');
@@ -210,7 +268,7 @@ function bindReplies(root) {
   }));
 }
 
-async function renderAccount(id) {
+async function renderAccount(id, query = new URLSearchParams()) {
   const a = await api(`/api/accounts/${id}`);
   const stages = state.meta.stages;
   const idx = stages.findIndex((s) => s.id === a.deal.stage);
@@ -393,6 +451,10 @@ async function renderAccount(id) {
     <div class="field"><textarea class="input" name="text" rows="4" required placeholder="What should the team know?" aria-label="Note"></textarea></div>
     <p class="muted small">Saved as a note on the company in HubSpot.</p>`,
     'Save', (data) => api(`/api/accounts/${id}/notes`, { method: 'POST', body: data }).then(() => route({ keepScroll: true }))));
+  if (query.get('note')) {
+    history.replaceState(null, '', `#/accounts/${id}`);
+    $('#add-note').click();
+  }
 }
 
 // ---------- inbox ----------
@@ -628,8 +690,9 @@ function openModal(html, submitLabel, onSubmit) {
 }
 
 function openTour() {
-  openModal(`<h2>Demo guide · 5 minutes</h2>
+  openModal(`<h2>Demo guide · 6 minutes</h2>
     <ol class="tour">
+      <li><b>Good morning.</b> <a class="link" href="#/home">Start here</a>: each role lands on its own to-do list with one-click actions. Use <i>View as</i> to switch roles.</li>
       <li><b>Sales: close a deal.</b> Pipeline → <a class="link" href="#/accounts/harborline">Harborline</a> → click <i>Closed won</i>. Watch HubSpot, Slack, Jira and Snowflake fire in the corner.</li>
       <li><b>Deal desk.</b> <a class="link" href="#/accounts/northgate">Northgate</a> → <i>Request discount</i> 20%. Then <a class="link" href="#/approvals">Approvals</a> → <i>Simulate Slack click</i>.</li>
       <li><b>Support.</b> <a class="link" href="#/inbox">Inbox</a> → <i>Simulate inbound</i> (Enterprise, angry). It's auto-flagged to Slack. Then <i>Escalate to engineering</i>.</li>
@@ -641,19 +704,23 @@ function openTour() {
 
 // ---------- router ----------
 async function route({ keepScroll = false } = {}) {
-  const [, section = 'pipeline', id] = (location.hash || '#/pipeline').split('/');
+  const [path, qs = ''] = (location.hash || '#/home').split('?');
+  const [, section = 'home', id] = path.split('/');
+  const query = new URLSearchParams(qs);
   const nav = section === 'accounts' && id ? 'accounts' : section;
   $$('[data-nav]').forEach((a) => a.classList.toggle('active', a.dataset.nav === nav));
   const y = scrollY;
   try {
-    if (section === 'accounts' && id) await renderAccount(id);
+    if (section === 'home') await renderHome();
+    else if (section === 'accounts' && id) await renderAccount(id, query);
     else if (section === 'accounts') await renderAccounts();
     else if (section === 'inbox') await renderInbox(id);
     else if (section === 'onboarding') await renderOnboarding();
     else if (section === 'approvals') await renderApprovals();
     else if (section === 'log') renderLog();
     else if (section === 'connections') renderConnections();
-    else await renderPipeline();
+    else if (section === 'pipeline') await renderPipeline();
+    else await renderHome();
   } catch (err) {
     view.innerHTML = `<div class="card empty">Couldn't load this page: ${esc(err.message)}</div>`;
   }

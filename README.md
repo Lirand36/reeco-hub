@@ -29,10 +29,11 @@ Everything runs in **mock mode** by default: each request is built exactly as th
 
 On Render's free plan the service sleeps after about 15 minutes idle, and the first visit after that takes around 30 seconds to wake it.
 
-## Demo script (5 minutes)
+## Demo script (6 minutes)
 
 The **▶ Demo guide** button in the app has the same steps with links.
 
+0. **Good morning.** Everyone lands on a role-specific dashboard: a short summary, four KPIs, and a ranked list of next best actions, each with a call to action. Many actions complete in one click (approve a discount, escalate a conversation, mark an onboarding step done, sync usage). Use **View as** to switch between Account Executive, Sales Manager, Support and Customer Success.
 1. **Close a deal.** Open *Harborline Hotel Group* → click **Closed won**. One click updates HubSpot, announces in `#deals`, creates `#onb-harborline` with the checklist, opens a Jira onboarding epic and logs to Snowflake.
 2. **Deal desk.** *Northgate Inns* → **Request discount** 20% (the approval threshold is 15%). The request goes to `#deal-desk` with Approve/Reject buttons. Approve it from **Approvals**, either as *Eitan B. (Sales Manager)* or with **Simulate Slack click**.
 3. **Support.** **Inbox** → **Simulate inbound** (Enterprise, angry). The message is auto-flagged to `#support-escalations`. Then **Escalate to engineering**: Jira bug, Intercom internal note and Slack alert. SLA countdowns are 1h for Enterprise and 4h for everyone else, and a breach alerts Slack once.
@@ -52,6 +53,7 @@ The **▶ Demo guide** button in the app has the same steps with links.
 Browser (vanilla JS, no build)
    │  REST + Server-Sent Events (live toasts, multi-user refresh)
    ▼
+home.js ────── Good morning dashboard: per-role KPIs and next best actions
 server.js ──── inbound webhooks: /webhooks/intercom, /webhooks/slack (signature-verified)
    │
 services.js ── business actions & automations ("what happens when a deal closes")

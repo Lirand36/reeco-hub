@@ -13,6 +13,7 @@ import * as slack from './src/connectors/slack.js';
 import * as snowflake from './src/connectors/snowflake.js';
 import { CONFIG, DEAL_STAGES, ONBOARDING_STEPS, USERS, db, reset } from './src/store.js';
 import * as svc from './src/services.js';
+import { goodMorning } from './src/home.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 const PUBLIC_DIR = fileURLToPath(new URL('./public/', import.meta.url));
@@ -89,6 +90,7 @@ const routes = [
     stages: DEAL_STAGES, users: USERS, config: CONFIG, integrations: integrations(),
     steps: ONBOARDING_STEPS.map(({ id, label, auto, hint }) => ({ id, label, auto: Boolean(auto), hint })),
   })],
+  ['GET', /^\/api\/home$/, (req) => goodMorning(actorOf(req))],
   ['GET', /^\/api\/accounts$/, () => db.accounts.map(summary)],
   ['GET', /^\/api\/accounts\/([\w-]+)$/, (req, [id]) => {
     const a = db.accounts.find((x) => x.id === id);
@@ -106,6 +108,12 @@ const routes = [
   ['POST', /^\/api\/accounts\/([\w-]+)\/notes$/, (req, [id], b) => svc.addNote(id, b.text, actorOf(req).name)],
   ['POST', /^\/api\/accounts\/([\w-]+)\/tickets$/, (req, [id], b) => svc.openTicket(id, b, actorOf(req).name)],
   ['POST', /^\/api\/accounts\/([\w-]+)\/sync-usage$/, (req, [id]) => svc.syncUsage(id, actorOf(req).name)],
+  ['POST', /^\/api\/onboarding\/sync$/, async (req) => {
+    const ids = db.accounts.filter((a) => a.status === 'Onboarding').map((a) => a.id);
+    const results = [];
+    for (const id of ids) results.push(await svc.syncUsage(id, actorOf(req).name));
+    return { ticked: results.flatMap((r) => r.ticked.map((t) => `${r.account.name}: ${t}`)) };
+  }],
   ['POST', /^\/api\/accounts\/([\w-]+)\/steps\/(\w+)$/, (req, [id, step]) => svc.toggleStep(id, step, actorOf(req).name)],
   ['POST', /^\/api\/conversations\/([\w-]+)\/reply$/, (req, [id], b) => svc.reply(id, b.text, actorOf(req).name, { close: Boolean(b.close) })],
   ['POST', /^\/api\/conversations\/([\w-]+)\/escalate$/, (req, [id]) => svc.escalate(id, actorOf(req).name)],
