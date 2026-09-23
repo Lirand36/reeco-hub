@@ -10,12 +10,14 @@ Reeco Hub is one internal workspace for Reeco's Sales, Support and Customer Succ
 | **Intercom** | Receives customer messages (webhook), replies, closes, adds internal notes |
 | **Jira** | Opens escalation bugs (`SUP`) and onboarding epics (`ONB`) |
 | **Slack** | Posts deal wins, escalations and SLA breaches, runs discount approvals with buttons, creates a channel per onboarding customer |
-| **Snowflake** | Reads product usage (properties live, POs, AI invoices, spend); writes every hub action to `GTM.HUB_EVENTS` |
+| **Snowflake** | Reads product usage and platform status (ERP sync, errors, app version); writes every hub action to `GTM.HUB_EVENTS` |
+| **Claude** | AI assist in the inbox: summary, customer mood, likely category, next step and a draft reply (structured output) |
 
 ## Run locally
 
 ```bash
-npm start           # Node 22+, zero dependencies
+npm install         # one dependency: the Anthropic SDK
+npm start           # Node 22+
 # → http://localhost:3000
 ```
 
@@ -36,13 +38,19 @@ The **▶ Demo guide** button in the app has the same steps with links.
 0. **Good morning.** Everyone lands on a role-specific dashboard: a short summary, four KPIs, and a ranked list of next best actions, each with a call to action. Many actions complete in one click (approve a discount, escalate a conversation, mark an onboarding step done, sync usage). Use **View as** to switch between Account Executive, Sales Manager, Support and Customer Success.
 1. **Close a deal.** Open *Harborline Hotel Group* → click **Closed won**. One click updates HubSpot, announces in `#deals`, creates `#onb-harborline` with the checklist, opens a Jira onboarding epic and logs to Snowflake.
 2. **Deal desk.** *Northgate Inns* → **Request discount** 20% (the approval threshold is 15%). The request goes to `#deal-desk` with Approve/Reject buttons. Approve it from **Approvals**, either as *Eitan B. (Sales Manager)* or with **Simulate Slack click**.
-3. **Support.** **Inbox** → **Simulate inbound** (Enterprise, angry). The message is auto-flagged to `#support-escalations`. Then **Escalate to engineering**: Jira bug, Intercom internal note and Slack alert. SLA countdowns are 1h for Enterprise and 4h for everyone else, and a breach alerts Slack once.
+3. **Support.** Sign in as *Ron A. (Support)* and open **Inbox**.
+   - **Queues:** Mine / Unassigned / Enterprise / Overdue / All open / Snoozed / Closed. **Assign to me**, change owner, or **Snooze** (1h, 4h, tomorrow). A snoozed conversation wakes up when the customer replies. Every change syncs to Intercom.
+   - **Account snapshot** (right panel): health, ARR, CSM and AE, platform status from Snowflake (ERP, sync status, errors in 24h, app version), open Jira tickets, and past conversations with their close reasons.
+   - **✨ AI assist:** one click gives a summary, the customer's mood, the likely category, a next step and a draft reply (Claude via the Anthropic API, or a rules-based stand-in in mock mode). **Use this reply** puts the draft in the reply box.
+   - **Close with a reason:** closing always asks why (the AI's suggested category is preselected). The reason is tagged in Intercom and logged to Snowflake. The **Closed** tab charts why customers contact support.
+   - **Simulate inbound** (Enterprise, angry) is auto-flagged to `#support-escalations`; **Escalate** opens a Jira bug with an Intercom internal note and a Slack alert. SLA countdowns are 1h for Enterprise and 4h for everyone else, and a breach alerts Slack once.
 4. **Onboarding.** **Onboarding** → **Sync all from Snowflake**. Usage-based steps (vendors connected, first PO, first AI invoice) tick themselves off; the CSM ticks manual steps. When all six are done, go-live is announced.
 5. **Under the hood.** **Integration log** shows every exact request and response.
 
 ## Rules (in `src/store.js → CONFIG`)
 
 - Discounts above **15%** need Sales Manager approval.
+- Close reasons: Platform bug (fixed / workaround), ERP / integration, How-to, Feature request, Account / billing, No response.
 - SLA: **Enterprise 1h**, Mid-market and Independent **4h**.
 - Auto-flag to Slack: any Enterprise message, or negative-sentiment keywords.
 - Onboarding steps: vendors connected (auto), catalog & pricing, accounting/ERP integration, staff trained, first PO (auto), first AI-processed invoice (auto).
@@ -58,7 +66,7 @@ server.js ──── inbound webhooks: /webhooks/intercom, /webhooks/slack (si
    │
 services.js ── business actions & automations ("what happens when a deal closes")
    │
-connectors/ ── hubspot · intercom · jira · slack · snowflake
+connectors/ ── hubspot · intercom · jira · slack · snowflake · claude
    │
 http.js ────── single outbound gateway: logging, timing, secret redaction, mock/live switch
 ```

@@ -22,20 +22,22 @@ function awaitingReply(c) {
 
 function support(user) {
   const convs = db.accounts.flatMap((a) => a.conversations.map((c) => ({ a, c })));
-  const waiting = convs.filter(({ c }) => awaitingReply(c));
-  const breached = waiting.filter(({ c }) => c.slaDueAt && minsUntil(c.slaDueAt) < 0);
-  const atRisk = waiting.filter(({ c }) => c.slaDueAt && minsUntil(c.slaDueAt) >= 0 && minsUntil(c.slaDueAt) <= 30);
-  const escalated = convs.filter(({ c }) => c.escalatedTo && c.state === 'open');
+  const snoozed = ({ c }) => c.snoozedUntil && new Date(c.snoozedUntil) > new Date();
+  const waitingAll = convs.filter((x) => awaitingReply(x.c) && !snoozed(x));
+  const mine = waitingAll.filter(({ c }) => c.assignee === user.name);
+  const unassigned = waitingAll.filter(({ c }) => !c.assignee);
+  const breached = waitingAll.filter(({ c }) => c.slaDueAt && minsUntil(c.slaDueAt) < 0);
+  const escalated = convs.filter(({ c }) => c.escalatedTo && c.state === 'open' && c.assignee === user.name);
 
-  const actions = waiting.map(({ a, c }) => {
+  const actions = [...mine, ...unassigned].map(({ a, c }) => {
     const m = c.slaDueAt ? minsUntil(c.slaDueAt) : null;
     const last = c.messages.at(-1);
     const priority = m == null ? 'normal' : m < 0 ? 'urgent' : m <= 30 ? 'high' : 'normal';
     const flagged = c.flagged?.length && !c.escalatedTo;
     return {
-      id: `reply-${c.id}`, priority, icon: '✉', sort: m ?? 9999,
-      title: `Reply to ${last.author} at ${a.name}`,
-      detail: `“${last.text.length > 120 ? last.text.slice(0, 117) + '…' : last.text}”`,
+      id: `reply-${c.id}`, priority, icon: c.assignee ? '✉' : '📥', sort: m ?? 9999,
+      title: c.assignee ? `Reply to ${last.author} at ${a.name}` : `Unassigned: ${last.author} at ${a.name}`,
+      detail: c.ai && c.ai.forMessages === c.messages.length ? `✨ ${c.ai.summary}` : `“${last.text.length > 120 ? last.text.slice(0, 117) + '…' : last.text}”`,
       tags: [
         m == null ? null : m < 0 ? { text: `SLA breached ${fmtMins(-m)} ago`, tone: 'bad' } : { text: `SLA in ${fmtMins(m)}`, tone: m <= 30 ? 'warn' : '' },
         a.segment === 'Enterprise' ? { text: 'Enterprise', tone: 'brand' } : null,
@@ -43,7 +45,9 @@ function support(user) {
         c.escalatedTo ? { text: c.escalatedTo, tone: 'info' } : null,
       ].filter(Boolean),
       cta: link('Reply now', `#/inbox/${c.id}`),
-      secondary: flagged ? call('Escalate to engineering', `/api/conversations/${c.id}/escalate`, null, 'Escalated to Jira + Slack') : null,
+      secondary: !c.assignee
+        ? call('Assign to me', `/api/conversations/${c.id}/assign`, { assignee: user.name }, 'Assigned to you in Intercom')
+        : flagged ? call('Escalate to engineering', `/api/conversations/${c.id}/escalate`, null, 'Escalated to Jira + Slack') : null,
     };
   });
 
@@ -57,17 +61,20 @@ function support(user) {
     });
   }
 
-  const summary = waiting.length
-    ? `${plural(waiting.length, 'customer')} waiting on a reply${breached.length ? `, ${breached.length} already past SLA` : ''}.`
+  const parts = [];
+  if (mine.length) parts.push(`${plural(mine.length, 'customer')} waiting on you`);
+  if (unassigned.length) parts.push(`${unassigned.length} unassigned in the queue`);
+  const summary = parts.length
+    ? `${parts.join(', ')}${breached.length ? `. ${breached.length} already past SLA` : ''}.`
     : 'Inbox zero. Nobody is waiting on you.';
 
   return {
     summary,
     kpis: [
-      { label: 'Waiting on reply', value: waiting.length },
-      { label: 'SLA breached', value: breached.length, tone: breached.length ? 'bad' : '' },
-      { label: 'SLA < 30 min', value: atRisk.length, tone: atRisk.length ? 'warn' : '' },
-      { label: 'With engineering', value: escalated.length },
+      { label: 'Waiting on you', value: mine.length },
+      { label: 'Unassigned', value: unassigned.length, tone: unassigned.length ? 'warn' : '' },
+      { label: 'SLA breached (team)', value: breached.length, tone: breached.length ? 'bad' : '' },
+      { label: 'Yours with engineering', value: escalated.length },
     ],
     actions,
     footer: link('Open inbox', '#/inbox'),

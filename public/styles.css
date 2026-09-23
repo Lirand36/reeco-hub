@@ -29,6 +29,7 @@
   --jira: #2684FF;
   --slack: #E01E5A;
   --snowflake: #29B5E8;
+  --claude: #D97757;
 
   --radius: 12px;
   --shadow: 0 1px 2px rgba(15, 20, 27, .04), 0 6px 20px rgba(15, 20, 27, .04);
@@ -136,6 +137,7 @@ textarea.input { resize: vertical; min-height: 44px; }
 .src.jira, .toast.jira { --dot: var(--jira); }
 .src.slack, .toast.slack { --dot: var(--slack); }
 .src.snowflake, .toast.snowflake { --dot: var(--snowflake); }
+.src.claude, .toast.claude { --dot: var(--claude); }
 
 .bar { height: 6px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
 .bar > span { display: block; height: 100%; border-radius: inherit; background: var(--brand); }
@@ -292,6 +294,46 @@ dialog h2 { margin-bottom: 14px; font-size: 17px; }
   .gm-action { flex-wrap: wrap; }
   .gm-ctas { width: 100%; justify-content: flex-end; }
   .gm-hero h1 { font-size: 23px; }
+}
+
+/* ---------- inbox v2: queues, AI assist, account snapshot ---------- */
+.tabs { display: flex; gap: 2px; margin-bottom: 10px; overflow-x: auto; border-bottom: 1px solid var(--border); }
+.tab { border: 0; background: none; padding: 8px 12px; cursor: pointer; color: var(--muted); font-weight: 500; border-bottom: 2px solid transparent; white-space: nowrap; }
+.tab .num { font-size: 12px; background: var(--surface-2); border-radius: 99px; padding: 0 7px; margin-left: 4px; }
+.tab.sel { color: var(--brand-ink); border-bottom-color: var(--brand); }
+.tab.sel .num { background: var(--brand-soft); }
+.inbox3 { display: grid; grid-template-columns: 300px minmax(0, 1fr) 300px; min-height: 620px; overflow: hidden; }
+.inbox3 .inbox-list { max-height: 78vh; }
+.snapshot { border-left: 1px solid var(--border); overflow-y: auto; max-height: 78vh; background: var(--surface); }
+.snap-head { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.snap-name { font-weight: 600; margin-top: 4px; }
+.snap-sec { padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.snap-sec:last-child { border-bottom: 0; }
+.snap-sec h3 { font-size: 13px; font-weight: 600; }
+.snap-sec .kv { margin-top: 8px; grid-template-columns: 76px 1fr; gap: 4px 10px; }
+.snap-row { display: flex; gap: 8px; align-items: center; padding: 6px 0; font-size: 13px; }
+a.snap-row:hover .grow { color: var(--brand-ink); }
+.toolbar-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 18px; border-bottom: 1px solid var(--border); }
+.input.sm { width: auto; padding: 4px 8px; font-size: 13px; }
+.ai-card { margin: 12px 18px 0; padding: 12px 14px; border-radius: 10px; background: linear-gradient(135deg, var(--brand-soft), var(--surface)); border: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+.ai-card.empty-ai { flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 13.5px; color: var(--muted); }
+.ai-summary { font-size: 14px; }
+pre.draft { max-height: 150px; overflow-y: auto; white-space: pre-wrap; font: inherit; font-size: 13.5px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin: 8px 0; }
+.chip.ai { background: var(--brand-soft); color: var(--brand-ink); }
+.reasons { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.reason { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; font-size: 14px; }
+.reason:has(input:checked) { border-color: var(--brand); background: var(--brand-soft); }
+.reason input { accent-color: var(--brand); }
+.reasons-chart { padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.rbar { display: grid; grid-template-columns: minmax(0, 1fr) 64px 16px; gap: 8px; align-items: center; margin-top: 4px; }
+@media (max-width: 1280px) {
+  .inbox3 { grid-template-columns: 280px minmax(0, 1fr); }
+  .snapshot { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--border); max-height: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  .snap-sec, .snap-head { border-bottom: 0; border-right: 1px solid var(--border); }
+}
+@media (max-width: 1080px) {
+  .inbox3 { grid-template-columns: minmax(0, 1fr); }
+  .inbox3 .inbox-list { max-height: 300px; border-right: 0; border-bottom: 1px solid var(--border); }
 }
 
 /* ---------- responsive ---------- */

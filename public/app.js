@@ -10,6 +10,7 @@ const SYSTEMS = {
   jira: { name: 'Jira', color: 'var(--jira)', letter: 'J' },
   slack: { name: 'Slack', color: 'var(--slack)', letter: 'S' },
   snowflake: { name: 'Snowflake', color: 'var(--snowflake)', letter: '❄' },
+  claude: { name: 'Claude', color: 'var(--claude)', letter: '✦' },
 };
 
 const state = { meta: null, log: [], logFilter: null, flashId: null };
@@ -138,7 +139,7 @@ async function renderHome() {
       </div>
       <div class="gm-switch" role="group" aria-label="View as">
         <span class="muted xs">View as</span>
-        ${state.meta.users.map((u) => `<button class="chip ${u.id === d.user.id ? 'sel' : ''}" data-as="${u.id}" aria-pressed="${u.id === d.user.id}">${esc(u.role)}</button>`).join('')}
+        ${state.meta.users.map((u) => `<button class="chip ${u.id === d.user.id ? 'sel' : ''}" data-as="${u.id}" aria-pressed="${u.id === d.user.id}">${esc(u.name.split(' ')[0])} · ${esc(u.role)}</button>`).join('')}
       </div>
     </section>
 
@@ -246,13 +247,28 @@ function conversationBlock(c) {
       ${c.messages.map((m) => `<div class="msg ${m.from}"><div class="who">${esc(m.author)} · ${rel(m.at)}</div>${esc(m.text)}</div>`).join('')}
     </div>
     ${c.state === 'open' ? `
-      <form class="reply" data-conv="${esc(c.id)}">
+      <form class="reply" data-conv="${esc(c.id)}" data-reason="${esc(c.ai?.category ?? '')}">
         <textarea class="input" name="text" rows="2" placeholder="Reply to customer (sent via Intercom)…" required></textarea>
         <div class="actions">
           <button class="btn primary sm" name="send">Send</button>
           <button class="btn sm" name="close">Send &amp; close</button>
         </div>
-      </form>` : '<div class="empty">Conversation closed.</div>'}`;
+      </form>` : `<div class="empty">Closed${c.closeReason ? ` as “${esc(reasonLabel(c.closeReason))}”` : ''}${c.closedBy ? ` by ${esc(c.closedBy)}` : ''}</div>`}`;
+}
+
+const reasonLabel = (id) => state.meta.closeReasons.find((r) => r.id === id)?.label ?? id;
+
+// Closing always asks why; Claude's suggested category is preselected when available.
+function pickCloseReason(suggested, onPick) {
+  openModal(`
+    <h2>Why is this conversation closing?</h2>
+    <div class="reasons" role="radiogroup" aria-label="Close reason">
+      ${state.meta.closeReasons.map((r) => `
+        <label class="reason"><input type="radio" name="reason" value="${r.id}" ${r.id === suggested ? 'checked' : ''} required />
+          <span>${esc(r.label)}</span>${r.id === suggested ? '<span class="chip ai">✨ suggested</span>' : ''}</label>`).join('')}
+    </div>
+    <p class="muted small">Tagged in Intercom and logged to Snowflake, so we can see what drives support volume.</p>`,
+    'Close conversation', async (data) => onPick(data.reason));
 }
 
 function bindReplies(root) {
@@ -260,11 +276,13 @@ function bindReplies(root) {
     e.preventDefault();
     const btn = e.submitter;
     const text = form.text.value;
-    run(btn, async () => {
-      await api(`/api/conversations/${form.dataset.conv}/reply`, { method: 'POST', body: { text, close: btn?.name === 'close' } });
+    const send = (reason) => run(btn, async () => {
+      await api(`/api/conversations/${form.dataset.conv}/reply`, { method: 'POST', body: { text, close: Boolean(reason), reason } });
       form.reset();
       route({ keepScroll: true });
     });
+    if (btn?.name === 'close') pickCloseReason(form.dataset.reason, (reason) => send(reason));
+    else send();
   }));
 }
 
@@ -464,71 +482,194 @@ const INBOUND_SAMPLES = [
   { label: 'Live: feature question', email: 'ana@coastalkeys.com', text: 'Can we set par levels per outlet for the pool bar?' },
 ];
 
+const isSnoozed = (c) => c.snoozedUntil && new Date(c.snoozedUntil) > new Date();
+const INBOX_TABS = [
+  { id: 'mine', label: 'Mine', test: (c, me) => c.state === 'open' && !isSnoozed(c) && c.assignee === me },
+  { id: 'unassigned', label: 'Unassigned', test: (c) => c.state === 'open' && !isSnoozed(c) && !c.assignee },
+  { id: 'enterprise', label: 'Enterprise', test: (c) => c.state === 'open' && !isSnoozed(c) && c.account.segment === 'Enterprise' },
+  { id: 'overdue', label: 'Overdue', test: (c) => c.state === 'open' && !isSnoozed(c) && c.slaDueAt && new Date(c.slaDueAt) < new Date() },
+  { id: 'open', label: 'All open', test: (c) => c.state === 'open' && !isSnoozed(c) },
+  { id: 'snoozed', label: 'Snoozed', test: (c) => c.state === 'open' && isSnoozed(c) },
+  { id: 'closed', label: 'Closed', test: (c) => c.state === 'closed' },
+];
+
+function snoozeOptions() {
+  const at = (h) => new Date(Date.now() + h * 3600_000);
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1); tomorrow.setHours(9, 0, 0, 0);
+  return [['1 hour', at(1)], ['4 hours', at(4)], ['Tomorrow 9:00', tomorrow]];
+}
+
+const SENTIMENT_TONE = { calm: 'good', confused: 'info', frustrated: 'warn', angry: 'bad' };
+
+function aiCard(c) {
+  if (c.state !== 'open') return '';
+  if (!c.ai) {
+    return `<div class="ai-card empty-ai"><span>✨ Get a summary, the customer's mood and a draft reply.</span>
+      <button class="btn sm ai-btn" id="ai-run">✨ Summarize &amp; draft reply</button></div>`;
+  }
+  const stale = c.ai.forMessages !== c.messages.length;
+  return `
+    <div class="ai-card">
+      <div class="spread">
+        <div class="row"><strong>✨ AI assist</strong>
+          <span class="chip ${SENTIMENT_TONE[c.ai.sentiment] ?? ''}">${esc(c.ai.sentiment)}</span>
+          <span class="chip">Likely: ${esc(reasonLabel(c.ai.category))}</span>
+          ${stale ? '<span class="chip warn">New messages since</span>' : ''}</div>
+        <button class="btn sm ghost" id="ai-run" title="Regenerate">↻ ${stale ? 'Refresh' : 'Regenerate'}</button>
+      </div>
+      <p class="ai-summary">${esc(c.ai.summary)}</p>
+      <p class="small"><b>Next step:</b> ${esc(c.ai.next_step)}</p>
+      <div class="ai-draft">
+        <div class="spread"><span class="small" style="font-weight:600">Suggested reply</span><button class="btn sm primary" id="ai-use">Use this reply</button></div>
+        <pre class="draft">${esc(c.ai.suggested_reply)}</pre>
+      </div>
+      <div class="muted xs">${c.ai.mode === 'live' ? `Claude · ${esc(c.ai.model)}` : 'Mock mode: rules-based stand-in until ANTHROPIC_API_KEY is set'} · ${rel(c.ai.at)}</div>
+    </div>`;
+}
+
+function snapshotPanel(a, currentId) {
+  const p = a.platform;
+  const tickets = a.tickets.filter((t) => t.status !== 'Done');
+  const history = a.conversations.filter((c) => c.id !== currentId).slice(0, 4);
+  const syncTone = { ok: 'good', degraded: 'warn', failing: 'bad' }[p?.syncStatus] ?? '';
+  return `
+    <div class="snap-head">
+      <div class="spread"><h2>Account snapshot</h2><a class="link xs" href="#/accounts/${a.id}">Full account →</a></div>
+      <div class="snap-name">${esc(a.name)}</div>
+      <div class="row" style="gap:4px;margin-top:6px">${statusChip(a.status)}<span class="chip">${esc(a.segment)}</span><span class="chip">${money(a.deal.amount)} ARR</span></div>
+      <div style="margin-top:10px">${healthBar(a.health)}</div>
+      <div class="muted xs" style="margin-top:6px">CSM ${esc(a.csm)} · AE ${esc(a.owner)} · ${a.properties} properties</div>
+    </div>
+    <div class="snap-sec">
+      <div class="spread"><h3>Platform</h3>${src('snowflake')}</div>
+      ${p ? `<dl class="kv small">
+          <dt>ERP</dt><dd>${esc(p.erp)}</dd>
+          <dt>Sync</dt><dd><span class="chip ${syncTone}">${esc(p.syncStatus)}</span> <span class="muted xs">${rel(p.lastSyncAt)}</span></dd>
+          <dt>Errors 24h</dt><dd class="num ${p.syncErrors24h ? 'tone-bad' : ''}">${p.syncErrors24h}</dd>
+          <dt>Version</dt><dd class="mono">${esc(p.appVersion)}</dd>
+          ${a.usage ? `<dt>Live</dt><dd>${a.usage.propertiesLive}/${a.properties} properties · ${compact(a.usage.activeUsers)} users</dd>` : ''}
+        </dl>` : '<p class="muted small">Not live on the platform yet.</p>'}
+    </div>
+    <div class="snap-sec">
+      <div class="spread"><h3>Open tickets · ${tickets.length}</h3>${src('jira')}</div>
+      ${tickets.map((t) => `<div class="snap-row"><span class="mono muted">${esc(t.key)}</span><span class="grow ellipsis">${esc(t.summary)}</span>${ticketStatus(t.status)}</div>`).join('') || '<p class="muted small">None.</p>'}
+    </div>
+    <div class="snap-sec">
+      <div class="spread"><h3>Past conversations</h3>${src('intercom')}</div>
+      ${history.map((c) => `<a class="snap-row" href="#/inbox/${esc(c.id)}"><span class="grow ellipsis">${esc(c.subject)}</span><span class="chip ${c.state === 'open' ? 'warn' : ''}">${c.state === 'open' ? 'Open' : esc(reasonLabel(c.closeReason ?? '')) || 'Closed'}</span></a>`).join('') || '<p class="muted small">First conversation.</p>'}
+    </div>
+    ${a.onboarding && a.status === 'Onboarding' ? `<div class="snap-sec"><h3>Onboarding</h3><p class="small">Day ${days(a.onboarding.startedAt)} · ${Object.values(a.onboarding.steps).filter((x) => x.done).length}/${state.meta.steps.length} steps</p></div>` : ''}`;
+}
+
 async function renderInbox(selectedId) {
-  const items = await api('/api/inbox');
-  const sel = items.find((i) => i.id === selectedId) ?? items.find((i) => i.state === 'open') ?? items[0];
+  const me = user();
+  state.inboxTab ??= me.team === 'support' ? 'mine' : 'open';
+  const [items, reasons] = await Promise.all([api('/api/inbox'), state.inboxTab === 'closed' ? api('/api/support/reasons') : null]);
+  const tab = INBOX_TABS.find((t) => t.id === state.inboxTab) ?? INBOX_TABS[4];
+  const list = items.filter((c) => tab.test(c, me.name));
+  const sel = items.find((i) => i.id === selectedId) ?? list[0];
+  const account = sel ? await api(`/api/accounts/${sel.account.id}`) : null;
+  const agents = state.meta.users.filter((u) => u.team === 'support');
+  const maxReason = reasons ? Math.max(1, ...reasons.map((r) => r.count)) : 1;
 
   view.innerHTML = `
     <div class="page-head">
-      <div><h1>Inbox</h1><p class="muted">Intercom conversations with account context. Enterprise and angry messages get flagged to Slack. SLA: ${Object.entries(state.meta.config.slaHours).map(([k, v]) => `${k} ${v}h`).join(' · ')}.</p></div>
+      <div><h1>Inbox</h1><p class="muted">Intercom conversations with the customer's account and platform status alongside. Enterprise and angry messages are flagged to Slack.</p></div>
       <div class="row">
-        <select class="input" id="sample" style="width:auto" aria-label="Inbound scenario">${INBOUND_SAMPLES.map((s, i) => `<option value="${i}">${esc(s.label)}</option>`).join('')}</select>
+        <select class="input" id="sample" style="width:auto" aria-label="Inbound scenario">${INBOUND_SAMPLES.map((x, i) => `<option value="${i}">${esc(x.label)}</option>`).join('')}</select>
         <button class="btn" id="simulate">⚡ Simulate inbound</button>
       </div>
     </div>
-    <div class="card inbox">
+    <div class="tabs" role="tablist" aria-label="Queues">
+      ${INBOX_TABS.map((t) => { const n = items.filter((c) => t.test(c, me.name)).length; return `<button role="tab" class="tab ${t.id === tab.id ? 'sel' : ''}" data-tab="${t.id}" aria-selected="${t.id === tab.id}">${esc(t.label)} <span class="num">${n}</span></button>`; }).join('')}
+    </div>
+    <div class="card inbox3">
       <div class="inbox-list">
-        ${items.map((i) => `
+        ${reasons ? `<div class="reasons-chart"><div class="muted xs" style="margin-bottom:6px">Why customers contacted us</div>
+          ${reasons.filter((r) => r.count).sort((x, y) => y.count - x.count).map((r) => `<div class="rbar"><span class="xs ellipsis">${esc(r.label)}</span><div class="bar"><span style="width:${(r.count / maxReason) * 100}%"></span></div><span class="xs num">${r.count}</span></div>`).join('')}</div>` : ''}
+        ${list.map((i) => `
           <a class="inbox-item ${i.id === sel?.id ? 'active' : ''} ${i.id === state.flashId ? 'flash' : ''}" href="#/inbox/${esc(i.id)}">
             <div class="spread"><strong class="ellipsis">${esc(i.account.name)}</strong><span class="muted xs" style="flex:none">${rel(i.updatedAt)}</span></div>
             <div class="small ellipsis">${esc(i.subject)}</div>
-            <div class="preview">${esc(i.messages.at(-1)?.text)}</div>
+            <div class="preview">${i.ai && i.ai.forMessages === i.messages.length ? `✨ ${esc(i.ai.summary)}` : esc(i.messages.at(-1)?.text)}</div>
             <div class="row" style="margin-top:6px;gap:4px">
-              ${i.state === 'open' ? '' : '<span class="chip good">Closed</span>'}
+              ${i.state === 'closed' ? `<span class="chip">${esc(reasonLabel(i.closeReason ?? '')) || 'Closed'}</span>` : ''}
+              ${isSnoozed(i) ? `<span class="chip info">Snoozed until ${new Date(i.snoozedUntil).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</span>` : ''}
               ${slaChip(i)}
+              <span class="chip ${i.assignee ? '' : 'warn'}">${i.assignee ? esc(i.assignee.split(' ')[0]) : 'Unassigned'}</span>
               ${i.account.segment === 'Enterprise' ? '<span class="chip brand">Enterprise</span>' : ''}
-              ${i.flagged?.length ? '<span class="chip bad">Flagged</span>' : ''}
+              ${i.flagged?.length && i.state === 'open' ? '<span class="chip bad">Flagged</span>' : ''}
               ${i.escalatedTo ? `<span class="chip info">${esc(i.escalatedTo)}</span>` : ''}
             </div>
-          </a>`).join('') || '<div class="empty">No conversations.</div>'}
+          </a>`).join('') || `<div class="empty">${tab.id === 'mine' ? 'Nothing assigned to you. Check <b>Unassigned</b>.' : 'Nothing here.'}</div>`}
       </div>
+
       <div class="inbox-thread">
         ${sel ? `
           <div class="card-head">
             <div class="grow"><h2>${esc(sel.subject)}</h2><a class="link small" href="#/accounts/${sel.account.id}">${esc(sel.account.name)} →</a></div>
-            <div class="row">
-              ${sel.escalatedTo ? `<span class="chip info">Escalated · ${esc(sel.escalatedTo)}</span>` : sel.state === 'open' ? '<button class="btn sm" id="escalate">🚨 Escalate to engineering</button>' : ''}
-              ${src('intercom', `#${sel.id}`)}
-            </div>
+            ${src('intercom', `#${sel.id}`)}
           </div>
+          ${sel.state === 'open' ? `
+          <div class="toolbar-row">
+            <label class="xs muted" for="assignee">Owner</label>
+            <select class="input sm" id="assignee">
+              <option value="">Unassigned</option>
+              ${agents.map((u) => `<option value="${esc(u.name)}" ${sel.assignee === u.name ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}
+            </select>
+            ${me.team === 'support' && sel.assignee !== me.name ? '<button class="btn sm" id="take">Assign to me</button>' : ''}
+            ${isSnoozed(sel) ? '<button class="btn sm" id="unsnooze">Unsnooze</button>'
+              : `<select class="input sm" id="snooze" aria-label="Snooze"><option value="">Snooze…</option>${snoozeOptions().map(([l, d]) => `<option value="${d.toISOString()}">${l}</option>`).join('')}</select>`}
+            <span class="grow"></span>
+            ${sel.escalatedTo ? `<span class="chip info">Escalated · ${esc(sel.escalatedTo)}</span>` : '<button class="btn sm" id="escalate">🚨 Escalate</button>'}
+            <button class="btn sm" id="close">✓ Close</button>
+          </div>` : ''}
           <div class="ctx">
-            <span>${esc(sel.account.segment)}</span>
-            <span><b>${money(sel.account.deal.amount)}</b> ARR</span>
-            <span>Health <b>${sel.account.health ?? 'n/a'}</b></span>
-            ${sel.account.usage ? `<span><b>${sel.account.usage.propertiesLive}/${sel.account.properties}</b> properties live</span><span><b>${compact(sel.account.usage.invoicesAi30d)}</b> AI invoices (30d)</span>` : ''}
             ${slaChip(sel)}
+            ${isSnoozed(sel) ? `<span class="chip info">Snoozed until ${new Date(sel.snoozedUntil).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })} (SLA still running)</span>` : ''}
+            ${(sel.flagged ?? []).map((f) => `<span class="chip bad">${esc(f)}</span>`).join('')}
           </div>
+          ${aiCard(sel)}
           ${conversationBlock(sel)}` : '<div class="empty">Select a conversation.</div>'}
       </div>
+
+      <aside class="snapshot" aria-label="Account snapshot">${account ? snapshotPanel(account, sel.id) : ''}</aside>
     </div>`;
   state.flashId = null;
 
+  $$('[data-tab]').forEach((b) => b.addEventListener('click', () => { state.inboxTab = b.dataset.tab; location.hash = '#/inbox'; route(); }));
   bindReplies(view);
-  $('#escalate')?.addEventListener('click', (e) => run(e.currentTarget, async () => {
-    const r = await api(`/api/conversations/${sel.id}/escalate`, { method: 'POST' });
-    toast(`<strong>Escalated:</strong> Jira ${esc(r.key)}, Slack <span class="mono">#support-escalations</span>, Intercom internal note`);
+  if (!sel) return;
+  const act = (btn, path, body, msg) => run(btn, async () => {
+    await api(`/api/conversations/${sel.id}/${path}`, { method: 'POST', body });
+    if (msg) toast(msg);
     route({ keepScroll: true });
-  }));
+  });
+  $('#assignee')?.addEventListener('change', (e) => act(e.target, 'assign', { assignee: e.target.value || null }));
+  $('#take')?.addEventListener('click', (e) => act(e.currentTarget, 'assign', { assignee: me.name }, 'Assigned to you'));
+  $('#snooze')?.addEventListener('change', (e) => e.target.value && act(e.target, 'snooze', { until: e.target.value }, 'Snoozed. It comes back when the time is up or the customer replies.'));
+  $('#unsnooze')?.addEventListener('click', (e) => act(e.currentTarget, 'snooze', { until: null }));
+  $('#escalate')?.addEventListener('click', (e) => act(e.currentTarget, 'escalate', null, 'Escalated: Jira bug, Slack #support-escalations, Intercom note'));
+  $('#close')?.addEventListener('click', (e) => pickCloseReason(sel.ai?.category, (reason) => act(e.currentTarget, 'close', { reason }, `Closed as “${reasonLabel(reason)}”`)));
+  $('#ai-run')?.addEventListener('click', (e) => act(e.currentTarget, 'ai'));
+  $('#ai-use')?.addEventListener('click', () => {
+    const ta = $('form.reply textarea');
+    ta.value = sel.ai.suggested_reply;
+    ta.focus();
+    ta.style.height = `${Math.min(ta.scrollHeight + 4, 260)}px`;
+  });
+
   $('#simulate').addEventListener('click', (e) => run(e.currentTarget, async () => {
-    const s = INBOUND_SAMPLES[$('#sample').value];
+    const x = INBOUND_SAMPLES[$('#sample').value];
     // Same shape as Intercom's conversation.user.created webhook
     const res = await fetch('/webhooks/intercom', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'notification_event', topic: 'conversation.user.created', data: { item: { type: 'conversation', id: String(215470000 + Math.floor(Math.random() * 99999)), source: { body: `<p>${s.text}</p>`, author: { type: 'user', email: s.email } } } } }),
+      body: JSON.stringify({ type: 'notification_event', topic: 'conversation.user.created', data: { item: { type: 'conversation', id: String(215470000 + Math.floor(Math.random() * 99999)), source: { body: `<p>${x.text}</p>`, author: { type: 'user', email: x.email } } } } }),
     });
     const r = await res.json();
     if (!res.ok) throw new Error(r.error);
+    state.inboxTab = 'unassigned';
     location.hash = `#/inbox/${r.conversationId}`;
   }));
 }
@@ -695,7 +836,7 @@ function openTour() {
       <li><b>Good morning.</b> <a class="link" href="#/home">Start here</a>: each role lands on its own to-do list with one-click actions. Use <i>View as</i> to switch roles.</li>
       <li><b>Sales: close a deal.</b> Pipeline → <a class="link" href="#/accounts/harborline">Harborline</a> → click <i>Closed won</i>. Watch HubSpot, Slack, Jira and Snowflake fire in the corner.</li>
       <li><b>Deal desk.</b> <a class="link" href="#/accounts/northgate">Northgate</a> → <i>Request discount</i> 20%. Then <a class="link" href="#/approvals">Approvals</a> → <i>Simulate Slack click</i>.</li>
-      <li><b>Support.</b> <a class="link" href="#/inbox">Inbox</a> → <i>Simulate inbound</i> (Enterprise, angry). It's auto-flagged to Slack. Then <i>Escalate to engineering</i>.</li>
+      <li><b>Support.</b> As Ron, open the <a class="link" href="#/inbox">Inbox</a>: <i>Mine</i> / <i>Unassigned</i> queues, and the <i>Account snapshot</i> on the right (platform, ERP sync, tickets, history). Click <i>✨ Summarize &amp; draft reply</i>, use the draft, then <i>Close</i> and pick a reason. The <i>Closed</i> tab shows why customers contact support.</li>
       <li><b>Onboarding.</b> <a class="link" href="#/onboarding">Onboarding</a> → <i>Sync all from Snowflake</i>. Usage-based steps tick themselves off, and a go-live gets announced.</li>
       <li><b>Under the hood.</b> <a class="link" href="#/log">Integration log</a> shows every exact API request and response.</li>
     </ol>`, null, null);

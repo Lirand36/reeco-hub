@@ -6,8 +6,9 @@ import * as jira from './connectors/jira.js';
 import * as intercom from './connectors/intercom.js';
 import * as slack from './connectors/slack.js';
 import * as snowflake from './connectors/snowflake.js';
+import * as claude from './connectors/claude.js';
 import { bus } from './bus.js';
-import { CONFIG, DEAL_STAGES, ONBOARDING_STEPS, db, findAccount, findAccountByEmail, findConversation } from './store.js';
+import { CLOSE_REASONS, CONFIG, DEAL_STAGES, ONBOARDING_STEPS, USERS, db, findAccount, findAccountByEmail, findConversation } from './store.js';
 
 export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -174,22 +175,143 @@ export async function openTicket(accountId, { summary, description, priority }, 
   return { account: a, key: entry.response.key };
 }
 
-export async function reply(conversationId, text, actor, { close = false } = {}) {
-  const found = findConversation(conversationId);
+function getConversation(id) {
+  const found = findConversation(id);
   need(found, 404, 'Conversation not found');
+  return found;
+}
+
+const reasonLabel = (id) => CLOSE_REASONS.find((r) => r.id === id)?.label;
+
+// Closing always carries a reason: tagged in Intercom, logged to Snowflake for "why do customers contact us".
+async function closeWithReason(a, c, reason, actor) {
+  need(reasonLabel(reason), 400, 'Pick a close reason');
+  await intercom.tag(c.id, reason, reasonLabel(reason));
+  failIfRejected(await intercom.close(c.id));
+  Object.assign(c, { state: 'closed', closeReason: reason, closedAt: now(), closedBy: actor, snoozedUntil: null, slaDueAt: null });
+  await track('conversation.closed', a.id, actor, { conversationId: c.id, reason });
+}
+
+export async function reply(conversationId, text, actor, { close = false, reason } = {}) {
+  const { account: a, conversation: c } = getConversation(conversationId);
   need(text?.trim(), 400, 'Message is empty');
-  const { account: a, conversation: c } = found;
+  if (close) need(reasonLabel(reason), 400, 'Pick a close reason');
   failIfRejected(await intercom.reply(c.id, text.trim()));
   c.messages.push({ from: 'agent', author: actor, text: text.trim(), at: now() });
   c.updatedAt = now();
   c.slaDueAt = null; // answered
-  if (close) {
-    await intercom.close(c.id);
-    c.state = 'closed';
-  }
-  await track(close ? 'conversation.closed' : 'conversation.replied', a.id, actor, { conversationId: c.id });
+  if (!c.assignee) await assign(c.id, actor, actor, { quiet: true }); // replying takes ownership
+  if (close) await closeWithReason(a, c, reason, actor);
+  else await track('conversation.replied', a.id, actor, { conversationId: c.id });
   changed(a.id);
   return { conversation: c };
+}
+
+export async function close(conversationId, reason, actor) {
+  const { account: a, conversation: c } = getConversation(conversationId);
+  need(c.state !== 'closed', 409, 'Already closed');
+  await closeWithReason(a, c, reason, actor);
+  changed(a.id);
+  return { conversation: c };
+}
+
+export async function assign(conversationId, assigneeName, actor, { quiet = false } = {}) {
+  const { account: a, conversation: c } = getConversation(conversationId);
+  const u = assigneeName ? USERS.find((x) => x.name === assigneeName && x.team === 'support') : null;
+  need(!assigneeName || u, 400, 'Can only assign to a support agent');
+  failIfRejected(await intercom.assign(c.id, u?.intercomAdminId ?? null));
+  c.assignee = u?.name ?? null;
+  await track(u ? 'conversation.assigned' : 'conversation.unassigned', a.id, actor, { conversationId: c.id, assignee: c.assignee });
+  if (!quiet) changed(a.id);
+  return { conversation: c };
+}
+
+export async function snooze(conversationId, until, actor) {
+  const { account: a, conversation: c } = getConversation(conversationId);
+  if (!until) {
+    failIfRejected(await intercom.reopen(c.id));
+    c.snoozedUntil = null;
+    await track('conversation.unsnoozed', a.id, actor, { conversationId: c.id });
+  } else {
+    need(new Date(until) > new Date(), 400, 'Snooze time must be in the future');
+    failIfRejected(await intercom.snooze(c.id, until));
+    c.snoozedUntil = new Date(until).toISOString();
+    await track('conversation.snoozed', a.id, actor, { conversationId: c.id, until: c.snoozedUntil });
+  }
+  changed(a.id);
+  return { conversation: c };
+}
+
+// ---------------------------------------------------------------- AI assist
+
+function accountContext(a, c) {
+  const p = a.platform;
+  const tickets = a.tickets.filter((t) => t.status !== 'Done');
+  return [
+    `${a.name}: ${a.segment}, ${a.properties} properties, ${a.status}, health ${a.health ?? 'n/a'}, ${money(a.deal.amount)} ARR. CSM ${a.csm}.`,
+    p ? `Platform: ERP ${p.erp}, sync ${p.syncStatus} (${p.syncErrors24h} errors in 24h), app ${p.appVersion}.` : 'Platform: not live yet.',
+    tickets.length ? `Open engineering tickets: ${tickets.map((t) => `${t.key} "${t.summary}" (${t.status})`).join('; ')}.` : 'No open engineering tickets.',
+    c.escalatedTo ? `This conversation is escalated to ${c.escalatedTo}.` : '',
+  ].filter(Boolean).join('\n');
+}
+
+// Mock-mode stand-in so the demo works without an API key. Deterministic keyword rules.
+function heuristicAssist(a, c, agentName) {
+  const last = c.messages.filter((m) => m.from === 'customer').at(-1);
+  const all = c.messages.filter((m) => m.from === 'customer').map((m) => m.text).join(' ').toLowerCase();
+  const first = last.author.split(' ')[0];
+  const agent = agentName.split(' ')[0];
+  const has = (re) => re.test(all);
+  const sentiment = has(/unacceptable|third time|furious|cancel/) ? 'angry'
+    : has(/still|again|broken|blocking|slow/) ? 'frustrated'
+    : has(/how do|where do|how can|\?/) ? 'confused' : 'calm';
+  const category = has(/netsuite|intacct|quickbooks|sync|gl code|erp/) ? 'integration'
+    : has(/duplicate|error|502|broken|misread|wrong|failing/) ? 'bug_workaround'
+    : has(/can reeco|feature|would be great|automatically/) ? 'feature_request'
+    : has(/billing|pricing|seats?|contract/) ? 'account_billing' : 'how_to';
+  const ticket = c.escalatedTo ?? a.tickets.find((t) => t.status !== 'Done' && !t.key.startsWith('ONB'))?.key;
+  const sentence = last.text.split(/(?<=[.?!])\s/)[0];
+  const erpNote = a.platform && a.platform.syncStatus !== 'ok' ? ` Their ${a.platform.erp} sync is ${a.platform.syncStatus} (${a.platform.syncErrors24h} errors in 24h).` : '';
+
+  const steps = {
+    integration: `Check the ${a.platform?.erp ?? 'ERP'} sync logs${ticket ? ` and link this to ${ticket}` : ', then escalate if it reproduces'}.`,
+    bug_workaround: ticket ? `Reference ${ticket} and offer a workaround while engineering fixes it.` : 'Reproduce, then escalate to engineering with an example.',
+    feature_request: 'Log it for product and set expectations. No timeline promises.',
+    how_to: 'Send the relevant guide and offer a 10-minute walkthrough.',
+    account_billing: `Loop in ${a.owner} for anything commercial.`,
+  };
+  const replies = {
+    integration: `Hi ${first}, thanks for flagging this, and sorry for the hassle. I can see the ${a.platform?.erp ?? 'ERP'} sync issue on our side${ticket ? ` and it's already with engineering under ${ticket}` : ''}. I'm checking your sync logs now and will update you as soon as I know more. In the meantime, nothing is lost on the Reeco side.\n\n${agent}`,
+    bug_workaround: `Hi ${first}, I'm sorry, that shouldn't happen, and I understand the manual work it's causing your team. ${ticket ? `Engineering is actively working on it (${ticket}). ` : ''}While they finish the fix, I'll clean up the affected records for you and keep you posted.\n\n${agent}`,
+    feature_request: `Hi ${first}, great question. Reeco doesn't do that automatically yet. I've shared your use case with our product team, and I'll let you know if it makes the roadmap. Happy to show you the closest option we have today.\n\n${agent}`,
+    how_to: `Hi ${first}, happy to help! You can set this up under Settings, and I'm sending a short guide with the steps. If it's easier, I can walk you through it on a 10-minute call.\n\n${agent}`,
+    account_billing: `Hi ${first}, thanks for reaching out. I've looped in ${a.owner}, your account manager, who will follow up today.\n\n${agent}`,
+  };
+  const loopCsm = sentiment === 'angry' && a.segment === 'Enterprise' ? `Loop in ${a.csm} (CSM) first. ` : '';
+  return {
+    summary: `${last.author} (${a.name}): ${sentence}${erpNote}`,
+    sentiment,
+    category,
+    next_step: loopCsm + steps[category],
+    suggested_reply: replies[category],
+  };
+}
+
+export async function aiAssist(conversationId, actor) {
+  const { account: a, conversation: c } = getConversation(conversationId);
+  need(c.messages.some((m) => m.from === 'customer'), 400, 'Nothing to summarize yet');
+  const transcript = c.messages.map((m) => `${m.from === 'customer' ? 'Customer' : 'Agent'} (${m.author}): ${m.text}`).join('\n');
+  const out = await claude.assist({
+    context: accountContext(a, c),
+    transcript,
+    agentName: actor,
+    categories: CLOSE_REASONS.map((r) => r.id),
+    mock: () => heuristicAssist(a, c, actor),
+  });
+  c.ai = { ...out, forMessages: c.messages.length, at: now() };
+  await track('ai.assist', a.id, actor, { conversationId: c.id, mode: out.mode });
+  changed(a.id);
+  return { ai: c.ai };
 }
 
 // One click: Jira bug for engineering + internal note in Intercom + alert in Slack.
@@ -250,6 +372,7 @@ export async function ingestIntercom(payload) {
     a.conversations.unshift(c);
   }
   c.state = 'open';
+  c.snoozedUntil = null; // a customer reply wakes a snoozed conversation
   c.messages.push({ from: 'customer', author: a.contact.name, text, at: now() });
   c.updatedAt = now();
   c.slaDueAt = new Date(Date.now() + (CONFIG.slaHours[a.segment] ?? 4) * 3600_000).toISOString();

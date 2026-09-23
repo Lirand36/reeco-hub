@@ -11,7 +11,8 @@ import * as jira from './src/connectors/jira.js';
 import * as intercom from './src/connectors/intercom.js';
 import * as slack from './src/connectors/slack.js';
 import * as snowflake from './src/connectors/snowflake.js';
-import { CONFIG, DEAL_STAGES, ONBOARDING_STEPS, USERS, db, reset } from './src/store.js';
+import * as claude from './src/connectors/claude.js';
+import { CLOSE_REASONS, CONFIG, DEAL_STAGES, ONBOARDING_STEPS, USERS, db, reset } from './src/store.js';
 import * as svc from './src/services.js';
 import { goodMorning } from './src/home.js';
 
@@ -83,11 +84,12 @@ const integrations = () => [
   { id: 'jira', name: 'Jira', role: 'Escalations & onboarding epics', live: jira.isLive(), env: ['JIRA_BASE_URL', 'JIRA_EMAIL', 'JIRA_API_TOKEN'] },
   { id: 'slack', name: 'Slack', role: 'Alerts, approvals, onboarding channels', live: slack.isLive(), env: ['SLACK_BOT_TOKEN', 'SLACK_SIGNING_SECRET', 'SLACK_CHANNEL_*'] },
   { id: 'snowflake', name: 'Snowflake', role: 'Product usage in, hub events out', live: snowflake.isLive(), env: ['SNOWFLAKE_ACCOUNT', 'SNOWFLAKE_TOKEN', 'SNOWFLAKE_WAREHOUSE'] },
+  { id: 'claude', name: 'Claude', role: 'AI assist: summaries & draft replies', live: claude.isLive(), env: ['ANTHROPIC_API_KEY', 'CLAUDE_MODEL'] },
 ];
 
 const routes = [
   ['GET', /^\/api\/meta$/, () => ({
-    stages: DEAL_STAGES, users: USERS, config: CONFIG, integrations: integrations(),
+    stages: DEAL_STAGES, users: USERS, config: CONFIG, integrations: integrations(), closeReasons: CLOSE_REASONS,
     steps: ONBOARDING_STEPS.map(({ id, label, auto, hint }) => ({ id, label, auto: Boolean(auto), hint })),
   })],
   ['GET', /^\/api\/home$/, (req) => goodMorning(actorOf(req))],
@@ -102,6 +104,12 @@ const routes = [
       .sort((x, y) => (y.state === 'open') - (x.state === 'open') || y.updatedAt.localeCompare(x.updatedAt))],
   ['GET', /^\/api\/approvals$/, () => db.approvals.map((p) => ({ ...p, account: summary(db.accounts.find((a) => a.id === p.accountId)) }))],
   ['GET', /^\/api\/log$/, () => getLog()],
+  // Why customers contact support: close reasons across all conversations (Snowflake-backed in production)
+  ['GET', /^\/api\/support\/reasons$/, () => {
+    const counts = Object.fromEntries(CLOSE_REASONS.map((r) => [r.id, 0]));
+    for (const a of db.accounts) for (const c of a.conversations) if (c.closeReason) counts[c.closeReason]++;
+    return CLOSE_REASONS.map((r) => ({ ...r, count: counts[r.id] }));
+  }],
 
   ['POST', /^\/api\/accounts\/([\w-]+)\/deal-stage$/, (req, [id], b) => svc.changeDealStage(id, b.stage, actorOf(req).name)],
   ['POST', /^\/api\/accounts\/([\w-]+)\/discount$/, (req, [id], b) => svc.requestDiscount(id, b, actorOf(req).name)],
@@ -115,7 +123,11 @@ const routes = [
     return { ticked: results.flatMap((r) => r.ticked.map((t) => `${r.account.name}: ${t}`)) };
   }],
   ['POST', /^\/api\/accounts\/([\w-]+)\/steps\/(\w+)$/, (req, [id, step]) => svc.toggleStep(id, step, actorOf(req).name)],
-  ['POST', /^\/api\/conversations\/([\w-]+)\/reply$/, (req, [id], b) => svc.reply(id, b.text, actorOf(req).name, { close: Boolean(b.close) })],
+  ['POST', /^\/api\/conversations\/([\w-]+)\/reply$/, (req, [id], b) => svc.reply(id, b.text, actorOf(req).name, { close: Boolean(b.close), reason: b.reason })],
+  ['POST', /^\/api\/conversations\/([\w-]+)\/close$/, (req, [id], b) => svc.close(id, b.reason, actorOf(req).name)],
+  ['POST', /^\/api\/conversations\/([\w-]+)\/assign$/, (req, [id], b) => svc.assign(id, b.assignee ?? null, actorOf(req).name)],
+  ['POST', /^\/api\/conversations\/([\w-]+)\/snooze$/, (req, [id], b) => svc.snooze(id, b.until ?? null, actorOf(req).name)],
+  ['POST', /^\/api\/conversations\/([\w-]+)\/ai$/, (req, [id]) => svc.aiAssist(id, actorOf(req).name)],
   ['POST', /^\/api\/conversations\/([\w-]+)\/escalate$/, (req, [id]) => svc.escalate(id, actorOf(req).name)],
   ['POST', /^\/api\/approvals\/([\w-]+)$/, (req, [id], b) => {
     const user = actorOf(req);

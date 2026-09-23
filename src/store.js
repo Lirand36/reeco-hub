@@ -28,15 +28,34 @@ export const ONBOARDING_STEPS = [
   { id: 'firstInvoice', label: 'First AI-processed invoice', auto: (u) => u.invoicesAi30d > 0, hint: 'first AI invoice in Snowflake' },
 ];
 
+// Why a conversation was closed. Tagged in Intercom and logged to Snowflake for reporting.
+export const CLOSE_REASONS = [
+  { id: 'bug_fixed', label: 'Platform bug: fixed' },
+  { id: 'bug_workaround', label: 'Platform bug: workaround given' },
+  { id: 'integration', label: 'ERP / integration issue' },
+  { id: 'how_to', label: 'How-to / training' },
+  { id: 'feature_request', label: 'Feature request' },
+  { id: 'account_billing', label: 'Account / billing' },
+  { id: 'no_response', label: 'No response / duplicate' },
+];
+
 export const USERS = [
   { id: 'maya', name: 'Maya K.', role: 'Account Executive', team: 'sales' },
   { id: 'eitan', name: 'Eitan B.', role: 'Sales Manager', team: 'sales', approver: true },
-  { id: 'ron', name: 'Ron A.', role: 'Support', team: 'support' },
+  { id: 'ron', name: 'Ron A.', role: 'Support', team: 'support', intercomAdminId: '5823101' },
+  { id: 'tal', name: 'Tal G.', role: 'Support', team: 'support', intercomAdminId: '5823114' },
   { id: 'dana', name: 'Dana S.', role: 'Customer Success', team: 'cs' },
 ];
 
 const ago = (h) => new Date(Date.now() - h * 3600_000).toISOString();
 const inH = (h) => new Date(Date.now() + h * 3600_000).toISOString();
+const closed = (id, subject, customer, agent, reason, hoursAgo, question, answer) => ({
+  id, subject, state: 'closed', assignee: agent, closeReason: reason, updatedAt: ago(hoursAgo), slaDueAt: null,
+  messages: [
+    { from: 'customer', author: customer, text: question, at: ago(hoursAgo + 2) },
+    { from: 'agent', author: agent, text: answer, at: ago(hoursAgo) },
+  ],
+});
 const steps = (done = []) =>
   Object.fromEntries(ONBOARDING_STEPS.map((s) => [s.id, done.includes(s.id) ? { done: true, at: ago(48), by: s.auto ? 'Snowflake' : 'Dana S.' } : { done: false }]));
 
@@ -78,15 +97,18 @@ function seedAccounts() {
       contact: { name: 'Priya Nair', role: 'Corporate Controller', email: 'priya@sableandpine.com' },
       deal: { id: '18840311', name: 'Sable & Pine: 6 resorts', amount: 54000, stage: 'closedwon', discountPct: 10 },
       usage: { propertiesLive: 2, activeUsers: 23, pos30d: 41, invoicesAi30d: 0, spend30d: 184000, vendorsConnected: 7, lastActive: ago(0.5) },
+      platform: { erp: 'Sage Intacct', syncStatus: 'failing', lastSyncAt: ago(3), syncErrors24h: 14, appVersion: '4.18.2' },
       onboarding: { startedAt: ago(24 * 12), slackChannel: '#onb-sable-pine', jiraEpic: 'ONB-114', steps: steps(['vendors', 'catalog', 'firstPo']) },
       tickets: [
         { key: 'ONB-114', summary: 'Onboarding: Sable & Pine Resorts', status: 'In Progress', priority: 'High', createdAt: ago(24 * 12) },
         { key: 'SUP-2297', summary: 'Sage Intacct sync: GL codes not mapping for resort #3', status: 'In Progress', priority: 'High', createdAt: ago(40) },
       ],
       conversations: [
-        { id: '215469301', subject: 'Invoice capture: how to route to approvers?', state: 'open', updatedAt: ago(2.5), slaDueAt: inH(1.5), messages: [
+        { id: '215469301', subject: 'Invoice capture: how to route to approvers?', state: 'open', assignee: 'Ron A.', updatedAt: ago(2.5), slaDueAt: inH(1.5), messages: [
           { from: 'customer', author: 'Priya Nair', text: 'Where do we set who approves invoices per property? We want GMs to approve under $5k.', at: ago(2.5) },
         ] },
+        closed('215468802', 'GL codes missing after Intacct sync', 'Priya Nair', 'Tal G.', 'integration', 40,
+          'After yesterday\'s sync, resort #3 invoices have no GL codes in Intacct.', 'Engineering is on it (SUP-2297). I\'ve re-mapped the codes manually for now.'),
       ],
       notes: [{ text: 'Kickoff went well. ERP integration is the long pole (Sage Intacct).', author: 'Dana S.', at: ago(24 * 10) }],
     },
@@ -97,14 +119,19 @@ function seedAccounts() {
       contact: { name: 'Greg Walsh', role: 'CFO', email: 'greg.walsh@meridiansuites.com' },
       deal: { id: '18840402', name: 'Meridian: renewal + inventory module', amount: 240000, stage: 'decisionmakerboughtin', discountPct: 0 },
       usage: { propertiesLive: 22, activeUsers: 311, pos30d: 2140, invoicesAi30d: 5870, spend30d: 3_420_000, vendorsConnected: 188, lastActive: ago(0.1) },
+      platform: { erp: 'NetSuite', syncStatus: 'degraded', lastSyncAt: ago(0.4), syncErrors24h: 37, appVersion: '4.18.2' },
       onboarding: { startedAt: ago(24 * 300), completedAt: ago(24 * 262), slackChannel: '#onb-meridian', jiraEpic: 'ONB-061', steps: steps(ONBOARDING_STEPS.map((s) => s.id)) },
       tickets: [
         { key: 'SUP-2301', summary: 'Invoices duplicated in NetSuite after AP sync retry', status: 'In Progress', priority: 'Highest', createdAt: ago(30) },
       ],
       conversations: [
-        { id: '215469377', subject: 'Duplicate invoices in NetSuite', state: 'open', updatedAt: ago(0.8), slaDueAt: inH(0.2), flagged: ['Enterprise account', 'negative sentiment'], messages: [
+        { id: '215469377', subject: 'Duplicate invoices in NetSuite', state: 'open', assignee: null, updatedAt: ago(0.8), slaDueAt: inH(0.2), flagged: ['Enterprise account', 'negative sentiment'], messages: [
           { from: 'customer', author: 'Greg Walsh', text: 'This is the third time this month invoices were pushed twice to NetSuite. Our AP team is reconciling by hand. This is unacceptable before renewal.', at: ago(0.8) },
         ] },
+        closed('215467710', 'Duplicate invoices after sync retry', 'Greg Walsh', 'Ron A.', 'bug_workaround', 24 * 9,
+          'We have 40 invoices duplicated in NetSuite from last night.', 'We rolled back the duplicates and paused auto-retry for your workspace while engineering fixes the root cause.'),
+        closed('215466930', 'Add approvers for new property', 'Greg Walsh', 'Tal G.', 'how_to', 24 * 21,
+          'How do we add approvers for the new Austin property?', 'Settings → Approval flows → Austin → Add approver. Sent you a 2-min video too.'),
       ],
       notes: [{ text: 'Renewal in 60 days. Health dropped after the NetSuite sync incidents.', author: 'Dana S.', at: ago(12) }],
     },
@@ -115,12 +142,19 @@ function seedAccounts() {
       contact: { name: 'Ana Lopez', role: 'Purchasing Manager', email: 'ana@coastalkeys.com' },
       deal: { id: '18840455', name: 'Coastal Keys: add recipe costing', amount: 18000, stage: 'appointmentscheduled', discountPct: 0 },
       usage: { propertiesLive: 9, activeUsers: 64, pos30d: 612, invoicesAi30d: 1340, spend30d: 890_000, vendorsConnected: 57, lastActive: ago(0.3) },
+      platform: { erp: 'QuickBooks Online', syncStatus: 'ok', lastSyncAt: ago(0.2), syncErrors24h: 0, appVersion: '4.18.2' },
       onboarding: { startedAt: ago(24 * 200), completedAt: ago(24 * 171), slackChannel: '#onb-coastal-keys', jiraEpic: 'ONB-079', steps: steps(ONBOARDING_STEPS.map((s) => s.id)) },
       tickets: [],
       conversations: [
-        { id: '215469240', subject: 'Vendor price differs from catalog', state: 'open', updatedAt: ago(1), slaDueAt: inH(3), messages: [
+        { id: '215469240', subject: 'Vendor price differs from catalog', state: 'open', assignee: 'Tal G.', updatedAt: ago(1), slaDueAt: inH(3), messages: [
           { from: 'customer', author: 'Ana Lopez', text: 'Sysco invoice shows $4.20/lb for chicken breast but our catalog says $3.85. Can Reeco flag these automatically?', at: ago(1) },
         ] },
+        closed('215467002', 'Invoice OCR misread quantity', 'Ana Lopez', 'Ron A.', 'bug_fixed', 24 * 6,
+          'The AI read 12 cases as 120 on a US Foods invoice.', 'Thanks for flagging. The fix shipped in 4.18.2 and I corrected that invoice.'),
+        closed('215466410', 'Request: par levels per outlet', 'Ana Lopez', 'Tal G.', 'feature_request', 24 * 15,
+          'Can we set par levels per outlet?', 'Not yet. I logged it with product and will update you.'),
+        closed('215466111', 'Change billing contact', 'Ana Lopez', 'Ron A.', 'account_billing', 24 * 26,
+          'Please send invoices to ap@coastalkeys.com from now on.', 'Done, billing contact updated.'),
       ],
       notes: [{ text: 'Happy account, strong upsell fit for recipe costing.', author: 'Maya K.', at: ago(100) }],
     },

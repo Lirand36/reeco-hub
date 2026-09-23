@@ -63,5 +63,30 @@ export async function send({ system, action, method, url, headers = {}, body, li
   return entry;
 }
 
+// For integrations called through an SDK rather than fetch: same logging, timing and streaming.
+export async function record({ system, action, request, live, run, mockResponse }) {
+  const entry = { id: randomUUID(), ts: new Date().toISOString(), system, action, mode: live ? 'live' : 'mock', request };
+  const started = Date.now();
+  try {
+    if (live) {
+      entry.response = await run();
+    } else {
+      await sleep(600 + Math.random() * 700);
+      entry.response = typeof mockResponse === 'function' ? mockResponse() : mockResponse;
+    }
+    entry.status = 200;
+    entry.ok = true;
+  } catch (err) {
+    entry.status = err.status ?? 0;
+    entry.ok = false;
+    entry.response = { error: err.message };
+  }
+  entry.durationMs = Date.now() - started;
+  log.unshift(entry);
+  if (log.length > MAX_LOG) log.pop();
+  bus.emit('integration', entry);
+  return entry;
+}
+
 export const getLog = () => log;
 export const clearLog = () => { log = []; };
