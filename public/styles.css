@@ -645,8 +645,12 @@ dialog.drawer[open] { animation: slide-in .18s ease-out; }
 .dz.drop-on.lost { background: var(--bad-soft); border-color: var(--bad); }
 .link-strong { font-weight: 600; }
 .link-strong:hover { color: var(--brand-ink); }
-.pl-table td { vertical-align: top; }
-.pl-table .pl-next { min-width: 260px; max-width: 360px; }
+.pl-table td { vertical-align: middle; }
+.pl-table .pl-next { min-width: 300px; }
+.next-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+.next-row .sig-chips { margin-top: 0; }
+.next-title { border: 0; background: none; padding: 0; font: inherit; font-size: 13.5px; cursor: pointer; text-align: left; white-space: nowrap; }
+.next-title:hover .next-act { text-decoration: underline; text-underline-offset: 3px; }
 .pl-table select.input.sm { max-width: 170px; }
 .seg-inline button .ico { width: 14px; height: 14px; }
 /* other signals on a deal */
@@ -657,7 +661,7 @@ dialog.drawer[open] { animation: slide-in .18s ease-out; }
 .sig-chip.t-warn { color: var(--warn); }
 .sig-chip.t-idea { color: var(--info); }
 .deal .sig-chips { margin-top: 2px; }
-.deal .sig-chip { padding: 2px 7px; }
+.deal .sig-chip, .next-row .sig-chip { padding: 2px 7px; }
 /* deal pop-ups */
 dialog form.has-x { position: relative; padding-right: 48px; }
 .dlg-x { position: absolute; top: 12px; right: 12px; }
