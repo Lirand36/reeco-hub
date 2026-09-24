@@ -36,7 +36,11 @@ On Render's free plan the service sleeps after about 15 minutes idle, and the fi
 The same steps, with links, are in the app under the user menu (bottom-left) → **Demo guide**, or press **?**.
 
 0. **Good morning.** Everyone lands on a role-specific dashboard: a short summary, four KPIs, and a ranked list of next best actions, each with a call to action. Many actions complete in one click (approve a discount, escalate a conversation, mark an onboarding step done, sync usage). Switch between Account Executive, Sales Manager, Support and Customer Success from the user menu at the bottom-left.
-1. **Close a deal.** Open *Harborline Hotel Group* → click **Closed won**. One click updates HubSpot, announces in `#deals`, creates `#onb-harborline` with the checklist, opens a Jira onboarding epic and logs to Snowflake.
+1. **Sales pipeline.** Sign in as *Maya K. (Account Executive)* and open **Pipeline**: open deals only, as a **Board** (drag between stages) or a **Table** (sortable, stage menu per row). Each rep's choice is remembered. **My deals / Team** switches scope.
+   - **Next best action** on every deal, and a **Needs you today** list above: prospects who've gone quiet (no reply in 7+ days, high priority at 14) with a drafted follow-up that's logged in HubSpot; close dates that have passed; deals stuck in a stage; missing deal info; and **a colleague won a similar deal** (same segment and ERP, similar size, shared modules), with the business value and what worked, plus **Ask in Slack** to DM that colleague.
+   - **Stage gates:** moving a deal forward asks for what the stage needs, prefilled from HubSpot and saved back to it. Qualified: pain, properties, ERP, decision maker. Demo: date, Solutions Engineer, what to show, attendees; the SE gets the details in a Slack DM. Champion: champion and business value. Contract: signer, close date, legal contact. Closed lost: reason (and competitor).
+   - Try it: drag *Northgate Inns* to **Demo**, or use **Draft a follow-up** on *Lakeview Lodges*.
+   - **Close a deal:** mark *Harborline Hotel Group* **Closed won**. One click updates HubSpot, announces in `#deals`, creates `#onb-harborline` with the checklist, opens a Jira onboarding epic and logs to Snowflake.
 2. **Deal desk.** *Northgate Inns* → **Request discount** 20% (the approval threshold is 15%). The request goes to `#deal-desk` with Approve/Reject buttons. Approve it from **Approvals**, either as *Eitan B. (Sales Manager)* or with **Simulate Slack click**.
 3. **Support.** Sign in as *Ron A. (Support)* and open **Inbox**.
    - **Queue:** a table of conversations (customer, subject, classification, reply due, owner, last message), most urgent first and sortable by any column, in tabs: Mine / Unassigned / Enterprise / Overdue / All open / Snoozed / Closed. Click a row, or use `J` / `K` and `Enter`, to open it.
@@ -65,6 +69,7 @@ The same steps, with links, are in the app under the user menu (bottom-left) →
 ## Rules (in `src/store.js → CONFIG`)
 
 - Discounts above **15%** need Sales Manager approval.
+- A prospect is **quiet** after 7 days without a reply (high priority from 14). A deal is **stuck** after 14 days in Discovery, Qualified or Champion, or 10 in Demo or Contract sent.
 - Close reasons: Platform bug (fixed / workaround), ERP / integration, How-to, Feature request, Account / billing, No response.
 - SLA: **Enterprise 1h**, Mid-market and Independent **4h**.
 - Auto-flag to Slack: any Enterprise message, or an upset customer (keyword match). The flag drives the Slack alert; the inbox shows the classification instead.
@@ -77,6 +82,7 @@ Browser (vanilla JS, no build)
    │  REST + Server-Sent Events (live toasts, multi-user refresh)
    ▼
 home.js ────── Good morning dashboard: per-role KPIs and next best actions
+deals.js ───── sales signals: quiet prospects, stuck deals, stage gates, similar wins
 server.js ──── inbound webhooks: /webhooks/intercom, /webhooks/slack (signature-verified)
    │
 services.js ── business actions & automations ("what happens when a deal closes")

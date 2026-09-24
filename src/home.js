@@ -1,7 +1,8 @@
 // "Good morning" dashboard: per-role KPIs plus a ranked list of next best actions.
 // Each action carries a CTA the UI can render as a link or as a one-click API call.
 
-import { CONFIG, ONBOARDING_STEPS, db } from './store.js';
+import { CONFIG, DEAL_STAGES, ONBOARDING_STEPS, db } from './store.js';
+import { dealSignals, isOpen } from './deals.js';
 import { classificationLabel } from './classify.js';
 import { anomalyText, computeHealth } from './health.js';
 
@@ -85,6 +86,26 @@ function support(user) {
 
 // ---------------------------------------------------------------- sales (AE)
 
+const stageName = (id) => DEAL_STAGES.find((x) => x.id === id)?.label ?? id;
+// One pipeline signal as a Good morning action; CTAs open the same pop-ups as the Pipeline page.
+function dealAction(a, x, { team = false } = {}) {
+  const open = (kind, extra = '') => `#/pipeline?do=${kind}&deal=${a.id}${extra}`;
+  const cta = {
+    followup: () => link(x.cta.label, open('followup')),
+    closedate: () => link(x.cta.label, open('closedate')),
+    details: () => link(x.cta.label, open('details')),
+    stage: () => link(x.cta.label, open('stage', `&to=${x.cta.to}`)),
+    ask: () => call(x.cta.label, `/api/accounts/${a.id}/ask-colleague`, { wonId: x.cta.wonId }, 'Asked in Slack'),
+  }[x.cta.kind]();
+  return {
+    id: `deal-${a.id}-${x.type}`, dealId: a.id, priority: x.priority, icon: x.icon, sort: -a.deal.amount / 1e6,
+    title: `${a.name}: ${x.title}`, badge: a.segment === 'Enterprise' ? 'Enterprise' : null,
+    detail: x.detail,
+    tags: [{ text: stageName(a.deal.stage), tone: 'brand' }, { text: `${moneyK(a.deal.amount)} ARR`, tone: '' }, team ? { text: a.owner, tone: '' } : null].filter(Boolean),
+    cta: team ? link('Open pipeline', '#/pipeline') : cta,
+  };
+}
+
 function sales(user) {
   const mine = db.accounts.filter((a) => a.owner === user.name);
   const open = mine.filter((a) => !['closedwon', 'closedlost'].includes(a.deal.stage));
@@ -101,27 +122,14 @@ function sales(user) {
     });
   }
 
+  // Next best actions from the pipeline engine (src/deals.js)
   for (const a of open) {
-    const lastNote = a.notes[0]?.at;
-    const idle = lastNote ? daysSince(lastNote) : null;
-    if (a.deal.stage === 'contractsent') {
-      actions.push({
-        id: `close-${a.id}`, priority: 'high', icon: '✍', sort: 0,
-        title: `${a.name} has the contract. Get it signed.`,
-        detail: `${money(a.deal.amount)} ARR · ${a.properties} properties. Closing it kicks off onboarding automatically.`,
-        tags: [{ text: 'Contract sent', tone: 'brand' }],
-        cta: link('Open deal', `#/accounts/${a.id}`),
-      });
+    // At most two per deal, so one messy deal doesn't bury the rest
+    for (const x of dealSignals(a).filter((x) => x.cta && x.priority !== 'low').slice(0, 2)) {
+      actions.push(dealAction(a, x));
     }
-    if (idle == null || idle >= 5) {
-      actions.push({
-        id: `idle-${a.id}`, priority: 'normal', icon: '💤', sort: 1,
-        title: `${a.name}: ${idle == null ? 'no activity logged yet' : `quiet for ${idle} days`}`,
-        detail: `${a.deal.name} (${money(a.deal.amount)}). Log a next step so the deal doesn't stall.`,
-        tags: [],
-        cta: link('Add next step', `#/accounts/${a.id}?note=1`),
-      });
-    }
+  }
+  for (const a of open) {
     if (a.status === 'Live' && a.health != null && a.health < 50) {
       actions.push({
         id: `risk-${a.id}`, priority: 'high', icon: '⚠', sort: 1,
@@ -134,13 +142,13 @@ function sales(user) {
   }
 
   const pipeline = open.reduce((s, a) => s + a.deal.amount * (1 - (a.deal.discountPct || 0) / 100), 0);
-  const top = actions.filter((x) => x.priority !== 'info').length;
+  const top = new Set(actions.filter((x) => x.priority !== 'info' && x.dealId).map((x) => x.dealId)).size;
   return {
     summary: `${moneyK(pipeline)} open across ${plural(open.length, 'deal')}. ${top ? `${plural(top, 'deal')} need${top === 1 ? 's' : ''} a push today.` : 'Nothing urgent.'}`,
     kpis: [
       { label: 'Open pipeline', value: moneyK(pipeline) },
       { label: 'Open deals', value: open.length },
-      { label: 'Contracts out', value: open.filter((a) => a.deal.stage === 'contractsent').length },
+      { label: 'Gone quiet', value: open.filter((a) => dealSignals(a).some((x) => x.type === 'silent')).length, tone: open.some((a) => dealSignals(a).some((x) => x.type === 'silent')) ? 'warn' : '' },
       { label: 'Awaiting approval', value: db.approvals.filter((p) => p.status === 'pending' && p.requestedBy === user.name).length },
     ],
     actions,
@@ -164,7 +172,12 @@ function manager(user) {
       secondary: call('Reject', `/api/approvals/${p.id}`, { decision: 'rejected' }, 'Rejected. Rep notified in #deal-desk'),
     };
   });
-  const open = db.accounts.filter((a) => !['closedwon', 'closedlost'].includes(a.deal.stage));
+  const open = db.accounts.filter(isOpen);
+  // Deals across the team that need a push (high priority only, so it stays short)
+  for (const a of open) {
+    const x = dealSignals(a).find((y) => y.priority === 'high' && y.type !== 'sign');
+    if (x) actions.push({ ...dealAction(a, x, { team: true }), priority: 'normal', sort: 3 });
+  }
   const atRisk = db.accounts.filter((a) => a.status === 'Live' && a.health != null && a.health < 50);
   for (const a of atRisk) {
     actions.push({

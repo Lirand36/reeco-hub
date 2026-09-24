@@ -12,7 +12,8 @@ import * as intercom from './src/connectors/intercom.js';
 import * as slack from './src/connectors/slack.js';
 import * as snowflake from './src/connectors/snowflake.js';
 import * as claude from './src/connectors/claude.js';
-import { CLOSE_REASONS, CONFIG, DEAL_STAGES, FR_STATUSES, ONBOARDING_STEPS, PEOPLE, USERS, db, reset } from './src/store.js';
+import { CLOSE_REASONS, CONFIG, DEAL_STAGES, FR_STATUSES, ONBOARDING_STEPS, PEOPLE, SILENT_DAYS, STAGE_GATES, USERS, db, reset } from './src/store.js';
+import { dealView, fieldValue, isOpen } from './src/deals.js';
 import { HEALTH_WEIGHTS, anomalyText, computeHealth } from './src/health.js';
 import * as svc from './src/services.js';
 import { goodMorning } from './src/home.js';
@@ -122,7 +123,13 @@ const routes = [
   ['GET', /^\/api\/meta$/, () => ({
     stages: DEAL_STAGES, users: USERS, people: PEOPLE, classifications: CLASSIFICATIONS, frStatuses: FR_STATUSES, healthWeights: HEALTH_WEIGHTS, config: CONFIG, integrations: integrations(), closeReasons: CLOSE_REASONS,
     steps: ONBOARDING_STEPS.map(({ id, label, auto, hint }) => ({ id, label, auto: Boolean(auto), hint })),
+    stageGates: STAGE_GATES, silentDays: SILENT_DAYS,
   })],
+  // Open deals with what each one needs next (see src/deals.js)
+  ['GET', /^\/api\/pipeline$/, () => db.accounts.filter(isOpen).map((a) => ({
+    ...summary(a), contact: a.contact, ...dealView(a),
+    gateValues: Object.fromEntries(Object.values(STAGE_GATES).flatMap((g) => g.fields).map((f) => [f.id, fieldValue(a, f.id)])),
+  }))],
   ['GET', /^\/api\/home$/, (req) => goodMorning(actorOf(req))],
   ['GET', /^\/api\/accounts$/, () => db.accounts.map(summary)],
   ['GET', /^\/api\/accounts\/([\w-]+)$/, (req, [id]) => {
@@ -154,7 +161,10 @@ const routes = [
     return CLOSE_REASONS.map((r) => ({ ...r, count: counts[r.id] }));
   }],
 
-  ['POST', /^\/api\/accounts\/([\w-]+)\/deal-stage$/, (req, [id], b) => svc.changeDealStage(id, b.stage, actorOf(req).name)],
+  ['POST', /^\/api\/accounts\/([\w-]+)\/deal-stage$/, (req, [id], b) => svc.changeDealStage(id, b.stage, actorOf(req).name, b.fields)],
+  ['POST', /^\/api\/accounts\/([\w-]+)\/deal-fields$/, (req, [id], b) => svc.updateDealFields(id, b.fields, actorOf(req).name)],
+  ['POST', /^\/api\/accounts\/([\w-]+)\/follow-up$/, (req, [id], b) => svc.sendFollowUp(id, b, actorOf(req).name)],
+  ['POST', /^\/api\/accounts\/([\w-]+)\/ask-colleague$/, (req, [id], b) => svc.askColleague(id, b.wonId, actorOf(req).name)],
   ['POST', /^\/api\/accounts\/([\w-]+)\/discount$/, (req, [id], b) => svc.requestDiscount(id, b, actorOf(req).name)],
   ['POST', /^\/api\/accounts\/([\w-]+)\/notes$/, (req, [id], b) => svc.addNote(id, b.text, actorOf(req).name)],
   ['POST', /^\/api\/accounts\/([\w-]+)\/tickets$/, (req, [id], b) => svc.openTicket(id, b, actorOf(req).name)],
