@@ -17,6 +17,7 @@ import { dealView, fieldValue, isOpen } from './src/deals.js';
 import { HEALTH_WEIGHTS, anomalyText, computeHealth } from './src/health.js';
 import * as svc from './src/services.js';
 import { goodMorning } from './src/home.js';
+import { ROLES, areaOf, can, deniedMessage } from './src/access.js';
 import { CLASSIFICATIONS, classificationLabel, suggestedCloseReason } from './src/classify.js';
 import { withActivity, announce, getActivities, clearActivities, setActor } from './src/activity.js';
 
@@ -119,14 +120,44 @@ const integrations = () => [
   { id: 'claude', name: 'Claude', role: 'AI assist: summaries & draft replies', live: claude.isLive(), env: ['ANTHROPIC_API_KEY', 'CLAUDE_MODEL'] },
 ];
 
+// Who may call what (roles in src/access.js). The first matching rule wins; no rule means everyone.
+// The UI hides what a role can't use, but this is what actually enforces it.
+const GUARDS = [
+  ['GET', /^\/api\/pipeline$/, 'pipeline.view'],
+  ['GET', /^\/api\/(inbox|support\/reasons)$/, 'inbox.work'],
+  ['GET', /^\/api\/feature-requests$/, 'fr.view'],
+  ['GET', /^\/api\/approvals$/, 'approvals.view'],
+  ['GET', /^\/api\/(log|activity)$/, 'log.view'],
+  ['POST', /^\/api\/accounts\/[\w-]+\/(deal-stage|deal-fields|follow-up|ask-colleague|discount)$/, 'deal.edit'],
+  ['POST', /^\/api\/accounts\/[\w-]+\/notes$/, 'accounts.note'],
+  ['POST', /^\/api\/accounts\/[\w-]+\/tickets$/, 'tickets.create'],
+  ['POST', /^\/api\/(accounts\/[\w-]+\/(sync-usage|steps\/\w+)|onboarding\/sync)$/, 'onboarding.edit'],
+  ['POST', /^\/api\/anomalies\//, 'anomalies.edit'],
+  ['POST', /^\/api\/feature-requests\//, 'fr.edit'],
+  ['POST', /^\/api\/conversations\//, 'inbox.work'],
+  ['POST', /^\/api\/approvals\//, 'approvals.decide'],
+];
+function guard(req, method, pathname) {
+  const rule = GUARDS.find(([m, re]) => m === method && re.test(pathname));
+  if (!rule) return null;
+  const user = actorOf(req), cap = rule[2];
+  if (!can(user, cap)) throw new svc.HttpError(403, deniedMessage(cap));
+  // AEs work their own deals; managers and admins work the team's
+  if (cap === 'deal.edit' && !can(user, 'pipeline.team')) {
+    const a = db.accounts.find((x) => x.id === pathname.split('/')[3]);
+    if (a && a.owner !== user.name) throw new svc.HttpError(403, `This is ${a.owner}'s deal. Only they or the Sales Manager can change it.`);
+  }
+  return cap;
+}
+
 const routes = [
   ['GET', /^\/api\/meta$/, () => ({
     stages: DEAL_STAGES, users: USERS, people: PEOPLE, classifications: CLASSIFICATIONS, frStatuses: FR_STATUSES, healthWeights: HEALTH_WEIGHTS, config: CONFIG, integrations: integrations(), closeReasons: CLOSE_REASONS,
     steps: ONBOARDING_STEPS.map(({ id, label, auto, hint }) => ({ id, label, auto: Boolean(auto), hint })),
-    stageGates: STAGE_GATES, silentDays: SILENT_DAYS,
+    stageGates: STAGE_GATES, silentDays: SILENT_DAYS, roles: ROLES,
   })],
   // Open deals with what each one needs next (see src/deals.js)
-  ['GET', /^\/api\/pipeline$/, () => db.accounts.filter(isOpen).map((a) => ({
+  ['GET', /^\/api\/pipeline$/, (req) => db.accounts.filter((a) => isOpen(a) && (can(actorOf(req), 'pipeline.team') || a.owner === actorOf(req).name)).map((a) => ({
     ...summary(a), contact: a.contact, ...dealView(a),
     gateValues: Object.fromEntries(Object.values(STAGE_GATES).flatMap((g) => g.fields).map((f) => [f.id, fieldValue(a, f.id)])),
   }))],
@@ -147,7 +178,7 @@ const routes = [
     db.accounts.flatMap((a) => a.conversations.map((c) => ({ ...c, account: summary(a), classificationLabel: classificationLabel(c.classification), suggestedCloseReason: c.ai?.category ?? suggestedCloseReason(c.classification) })))
       .sort((x, y) => (y.state === 'open') - (x.state === 'open') || y.updatedAt.localeCompare(x.updatedAt))],
   ['GET', /^\/api\/feature-requests$/, () => db.featureRequests.map(frView)],
-  ['GET', /^\/api\/approvals$/, () => db.approvals.map((p) => ({ ...p, account: summary(db.accounts.find((a) => a.id === p.accountId)) }))],
+  ['GET', /^\/api\/approvals$/, (req) => db.approvals.filter((p) => can(actorOf(req), 'approvals.team') || p.requestedBy === actorOf(req).name).map((p) => ({ ...p, account: summary(db.accounts.find((a) => a.id === p.accountId)) }))],
   ['GET', /^\/api\/log$/, () => getLog()],
   // Activity log: one row per user action, with the plain-language steps it caused
   ['GET', /^\/api\/activity$/, () => {
@@ -197,11 +228,7 @@ const routes = [
   ['POST', /^\/api\/conversations\/([\w-]+)\/classify$/, (req, [id], b) => svc.reclassify(id, b.id, b.tool, actorOf(req).name)],
   ['POST', /^\/api\/conversations\/([\w-]+)\/ai$/, (req, [id]) => svc.aiAssist(id, actorOf(req).name)],
   ['POST', /^\/api\/conversations\/([\w-]+)\/escalate$/, (req, [id]) => svc.escalate(id, actorOf(req).name)],
-  ['POST', /^\/api\/approvals\/([\w-]+)$/, (req, [id], b) => {
-    const user = actorOf(req);
-    if (!user.approver) throw new svc.HttpError(403, `${user.role}s can't approve discounts`);
-    return svc.decideApproval(id, b.decision, user.name, 'hub');
-  }],
+  ['POST', /^\/api\/approvals\/([\w-]+)$/, (req, [id], b) => svc.decideApproval(id, b.decision, actorOf(req).name, 'hub')],
   ['POST', /^\/api\/reset$/, () => {
     reset();
     clearLog();
@@ -277,14 +304,15 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/events') return sse(req, res);
     if (pathname === '/healthz') return json(res, 200, { ok: true });
     const hook = pathname.match(/^\/webhooks\/(\w+)/);
-    if (hook && req.method === 'POST') return await withActivity({ slack: 'Slack', jira: 'Jira' }[hook[1]] ?? 'Intercom', () => handleWebhook(req, res, hook[1]));
+    if (hook && req.method === 'POST') return await withActivity({ slack: 'Slack', jira: 'Jira' }[hook[1]] ?? 'Intercom', () => handleWebhook(req, res, hook[1]), { slack: 'sales', jira: 'cs' }[hook[1]] ?? 'support');
 
     for (const [method, pattern, handler] of routes) {
       const m = pathname.match(pattern);
       if (!m || req.method !== method) continue;
+      const cap = guard(req, method, pathname);
       const body = method === 'POST' ? parseJson(await readRaw(req)) : undefined;
       const run = () => handler(req, m.slice(1), body);
-      return json(res, 200, await (method === 'POST' ? withActivity(actorOf(req).name, run) : run()));
+      return json(res, 200, await (method === 'POST' ? withActivity(actorOf(req).name, run, cap ? areaOf(cap) : 'system') : run()));
     }
     if (req.method === 'GET' && !pathname.startsWith('/api/')) return serveStatic(pathname, res);
     json(res, 404, { error: 'Not found' });
@@ -296,7 +324,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 setInterval(() => svc.checkSla().catch((e) => console.error('SLA check failed', e)), 30_000);
-setInterval(() => withActivity('Snowflake monitor', () => svc.detectAnomalies('Snowflake monitor')).catch((e) => console.error('Anomaly check failed', e)), 30 * 60_000);
+setInterval(() => withActivity('Snowflake monitor', () => svc.detectAnomalies('Snowflake monitor'), 'cs').catch((e) => console.error('Anomaly check failed', e)), 30 * 60_000);
 
 server.listen(PORT, () => {
   console.log(`Reeco Hub → http://localhost:${PORT}`);

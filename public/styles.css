@@ -738,3 +738,5 @@ details.onb-card > summary { list-style: none; cursor: pointer; }
 details.onb-card > summary::-webkit-details-marker { display: none; }
 details.onb-card:not([open]) > summary { border-bottom: 0; }
 details.onb-card[open] .onb-toggle { visibility: hidden; }
+.no-access { max-width: 520px; margin: 40px auto; }
+.no-access > .ico { width: 28px; height: 28px; color: var(--muted); }

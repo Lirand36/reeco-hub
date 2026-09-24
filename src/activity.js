@@ -10,8 +10,9 @@ const als = new AsyncLocalStorage();
 const MAX = 150;
 let activities = [];
 
-export function withActivity(actor, fn) {
-  const act = { id: randomUUID(), ts: new Date().toISOString(), actor, outcome: null, icon: 'i-done', tone: '' };
+// `area` (sales / support / cs / account / system) decides who gets the live notification.
+export function withActivity(actor, fn, area = 'system') {
+  const act = { id: randomUUID(), ts: new Date().toISOString(), actor, area, outcome: null, icon: 'i-done', tone: '' };
   return als.run(act, async () => {
     try {
       return await fn();
@@ -24,7 +25,7 @@ export function withActivity(actor, fn) {
         activities.unshift(act);
         if (activities.length > MAX) activities.pop();
         // One friendly message per action, sent to everyone who has the hub open
-        if (!act.failed) bus.emit('activity', { id: act.id, actor: act.actor, text: act.outcome, icon: act.icon, tone: act.tone, accountId: act.accountId });
+        if (!act.failed) bus.emit('activity', { id: act.id, actor: act.actor, area: act.area, text: act.outcome, icon: act.icon, tone: act.tone, accountId: act.accountId });
       }
     }
   });

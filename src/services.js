@@ -180,7 +180,7 @@ async function kickOffOnboarding(a, actor) {
   const epic = await jira.createIssue({
     project: 'onboarding', type: 'Epic', priority: 'High', labels: ['onboarding', 'auto'],
     summary: `Onboarding: ${a.name} (${a.properties} properties)`,
-    description: `Closed by ${actor}. ARR ${money(a.deal.amount)}. Contact: ${a.contact.name} (${a.contact.email}). CSM: ${a.csm}.`,
+    description: `Closed by ${actor}. ARR ${money(a.deal.amount)}. Contact: ${a.contact.name} (${a.contact.email}). CSM: ${a.csm}`,
   });
 
   const channelName = `onb-${a.id}`.slice(0, 80);
@@ -267,7 +267,7 @@ export async function decideApproval(approvalId, decision, actor, via = 'hub') {
   await track(`discount.${decision}`, a.id, actor, { pct: p.pct, approvalId: p.id, via });
   announce(decision === 'approved'
     ? `Approved: ${a.name} gets ${p.pct}% off. ${p.requestedBy} can close the deal.`
-    : `Rejected: no ${p.pct}% discount for ${a.name}. ${p.requestedBy} was let know.`, { icon: decision === 'approved' ? 'i-done' : 'i-x', tone: decision === 'approved' ? 'good' : '', accountId: a.id });
+    : `Rejected: no ${p.pct}% discount for ${a.name}. ${p.requestedBy} was told.`, { icon: decision === 'approved' ? 'i-done' : 'i-x', tone: decision === 'approved' ? 'good' : '', accountId: a.id });
   changed(a.id);
   return { approval: p };
 }
@@ -361,7 +361,7 @@ export async function assign(conversationId, assigneeName, actor, { quiet = fals
   if (!quiet) {
     announce(!u ? `${first(customerOf(c))}'s conversation is back in the unassigned queue.`
       : u.name === actor ? `${first(customerOf(c))} at ${a.name} is now yours.`
-      : `${first(customerOf(c))}'s conversation assigned to ${u.name}.`, { icon: 'i-user', accountId: a.id });
+      : `${u.name} now owns ${first(customerOf(c))}'s conversation.`, { icon: 'i-user', accountId: a.id });
   }
   if (!quiet) changed(a.id);
   return { conversation: c };

@@ -59,6 +59,22 @@ The same steps, with links, are in the app under the user menu (bottom-left) →
 5. **Onboarding.** **Onboarding** → **Sync all from Snowflake**. Usage-based steps (vendors connected, first PO, first AI invoice) tick themselves off; the CSM ticks manual steps. When all six are done, go-live is announced.
 6. **Under the hood.** The **Activity log** tells the story of every action in plain words (for example "Ticket SUP-2311 escalated to engineering, and Moshe L. (VP Support) was notified"). Open a row to see each step, and "Technical details" for the exact request and response.
 
+## Roles and access
+
+Each role sees only its own work. Switch user from the menu at the bottom-left to see the workspace change.
+
+| Role | Sees |
+|---|---|
+| **Account Executive** (Maya, Noa, Daniel) | Good morning, Accounts, Pipeline (own deals), Approvals (own requests) |
+| **Sales Manager** (Eitan) | The same for the whole team, and approves discounts |
+| **Support** (Ron, Tal) | Good morning, Accounts, Inbox, Feature requests (view) |
+| **Customer Success** (Dana) | Good morning, Accounts, My portfolio, Onboarding, Feature requests |
+| **Admin** (Alex, RevOps) | Everything, including the Activity log and Connections |
+
+- The account page shows each role the tabs it needs (Support lands on Support, CS on Health, Sales on the deal). Other teams' information is read-only; Support still sees ARR and segment for prioritising.
+- Search, keyboard shortcuts and live notifications follow the same rules, and a link to another team's page shows a friendly "not part of your workspace" page.
+- **The server enforces it.** The rules live in `src/access.js`; every API call is checked against them (a guard table in `server.js`), and AEs can only change their own deals. In production, roles come from SSO groups (Google / Okta) and records are scoped by HubSpot owner.
+
 ## Working in the hub
 
 - **Search:** `Ctrl K` / `⌘K` or `/` jumps to any account, open conversation or page.
@@ -92,6 +108,7 @@ connectors/ ── hubspot · intercom · jira · slack · snowflake · claude
    │
 http.js ────── single outbound gateway: logging, timing, secret redaction, mock/live switch
 activity.js ── groups each user action's calls and writes the one plain-language outcome users see
+access.js ──── roles: what each role can see and do (enforced by the server, mirrored by the UI)
 ```
 
 To add a system (e.g. NetSuite, Sage Intacct, Gong), add a file in `src/connectors/` and call it from `services.js`.
