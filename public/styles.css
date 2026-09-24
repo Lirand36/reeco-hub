@@ -556,6 +556,7 @@ h3.sub { font-size: 13px; font-weight: 600; margin: 16px 0 6px; }
 .fr-table tbody tr { cursor: default; }
 .fr-table tbody tr:hover { background: transparent; }
 .fr-table td { vertical-align: top; }
+.fr-table td[data-label="Customer"] { white-space: nowrap; }
 .fr-table .group-row th { background: var(--surface-2); color: var(--text); font-size: 14px; font-weight: 500; text-align: left; white-space: normal; padding: 9px 16px; border-top: 1px solid var(--border); position: static; }
 .fr-table tbody:first-of-type .group-row th { border-top: 0; }
 .fr-table tbody tr:last-child td { border-bottom: 0; }
@@ -567,10 +568,9 @@ h3.sub { font-size: 13px; font-weight: 600; margin: 16px 0 6px; }
   .fr-table tr:not(.group-row) { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
   .fr-table tr:not(.group-row) td { display: block; padding: 0; border: 0; }
   .fr-table tr:not(.group-row) td:first-child { grid-column: 1 / -1; }
-  .fr-table td[data-label="Asked"]::before, .fr-table td[data-label="Status"]::before { content: attr(data-label); display: block; font-size: 11px; color: var(--muted); }
+  .fr-table td[data-label="Asked"]::before, .fr-table td[data-label="Status"]::before, .fr-table td[data-label="Also asked by"]::before { content: attr(data-label); display: block; font-size: 11px; color: var(--muted); }
   .fr-table tbody tr:last-child { border-bottom: 0; }
 }
-.fr-row { flex-wrap: wrap; }
 .callout { display: flex; align-items: center; gap: 12px; padding: 12px 16px; margin-bottom: 12px; background: var(--brand-soft); border-color: color-mix(in srgb, var(--brand) 35%, transparent); }
 @media (max-width: 1080px) {
   .health-grid { grid-template-columns: minmax(0, 1fr); }
