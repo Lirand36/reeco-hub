@@ -98,11 +98,11 @@ export function followUpDraft(a) {
 }
 
 const PLAYBOOK = {
-  appointmentscheduled: { title: 'Qualify it', button: 'Qualify', detail: 'Capture the pain, ERP and decision maker, then move it to Qualified.', to: 'qualifiedtobuy' },
-  qualifiedtobuy: { title: 'Book the demo', button: 'Book demo', detail: 'Pick a date and loop in a Solutions Engineer.', to: 'presentationscheduled' },
-  presentationscheduled: { title: 'Confirm the champion', button: 'Confirm champion', detail: 'Get a named champion and the business value they agree to.', to: 'decisionmakerboughtin' },
-  decisionmakerboughtin: { title: 'Send the contract', button: 'Send contract', detail: 'Name the signer and legal contact, and set the close date.', to: 'contractsent' },
-  contractsent: { title: 'Get it signed', button: 'Mark won', detail: 'Closing it kicks off onboarding automatically.', to: 'closedwon' },
+  appointmentscheduled: { title: 'Qualify it', button: 'Qualify', verb: 'Qualify the deal', detail: 'Capture the pain, ERP and decision maker, then move it to Qualified.', to: 'qualifiedtobuy' },
+  qualifiedtobuy: { title: 'Book the demo', button: 'Book demo', verb: 'Book the demo', detail: 'Pick a date and loop in a Solutions Engineer.', to: 'presentationscheduled' },
+  presentationscheduled: { title: 'Confirm the champion', button: 'Confirm champion', verb: 'Confirm the champion', detail: 'Get a named champion and the business value they agree to.', to: 'decisionmakerboughtin' },
+  decisionmakerboughtin: { title: 'Send the contract', button: 'Send contract', verb: 'Send the contract', detail: 'Name the signer and legal contact, and set the close date.', to: 'contractsent' },
+  contractsent: { title: 'Get it signed', button: 'Mark won', verb: 'Get the contract signed', detail: 'Closing it kicks off onboarding automatically.', to: 'closedwon' },
 };
 
 export function dealSignals(a) {
@@ -117,33 +117,33 @@ export function dealSignals(a) {
   const followedUp = a.deal.followedUpAt && daysSince(a.deal.followedUpAt) < 3;
   if (quiet != null && quiet >= SILENT_DAYS.flag) {
     out.push(followedUp
-      ? { type: 'waiting', priority: 'low', icon: 'i-clock', tag: 'Waiting on reply', title: 'Waiting on reply', detail: `No reply in ${quiet} days. You followed up ${daysSince(a.deal.followedUpAt) ? `${daysSince(a.deal.followedUpAt)}d ago` : 'today'}; give it a couple of days.` }
-      : { type: 'silent', priority: quiet >= SILENT_DAYS.high ? 'high' : 'normal', icon: 'i-mail', tag: `Quiet ${quiet}d`, why: `No reply in ${quiet} days`, title: `Quiet ${quiet} days`, detail: `No reply from ${a.contact.name} (${a.contact.role}) in ${quiet} days. Last: “${last.subject}”.`, cta: { kind: 'followup', label: 'Follow up' }, days: quiet });
+      ? { type: 'waiting', priority: 'low', icon: 'i-clock', tag: 'Waiting on reply', action: `Waiting on ${name}'s reply`, why: 'You followed up recently', title: 'Waiting on reply', detail: `No reply in ${quiet} days. You followed up ${daysSince(a.deal.followedUpAt) ? `${daysSince(a.deal.followedUpAt)}d ago` : 'today'}; give it a couple of days.` }
+      : { type: 'silent', priority: quiet >= SILENT_DAYS.high ? 'high' : 'normal', icon: 'i-mail', tag: `Quiet ${quiet}d`, action: `Follow up with ${name}`, why: `No reply in ${quiet} days`, title: `Quiet ${quiet} days`, detail: `No reply from ${a.contact.name} (${a.contact.role}) in ${quiet} days. Last: “${last.subject}”.`, cta: { kind: 'followup', label: 'Follow up' }, days: quiet });
   }
 
   // 2. Close date passed
   if (a.deal.closeDate && new Date(a.deal.closeDate) < new Date()) {
     const d = daysSince(a.deal.closeDate);
-    out.push({ type: 'overdue', priority: 'high', icon: 'i-calendar', tag: 'Close date', why: `Close date passed ${d ? `${d} days ago` : 'today'}`, title: 'Close date passed', detail: `The close date passed ${d ? `${d} days ago` : 'today'}. Pick a new date you believe in, so the forecast stays honest.`, cta: { kind: 'closedate', label: 'New date' } });
+    out.push({ type: 'overdue', priority: 'high', icon: 'i-calendar', tag: 'Close date', action: 'Set a new close date', why: `Close date passed ${d ? `${d} days ago` : 'today'}`, title: 'Close date passed', detail: `The close date passed ${d ? `${d} days ago` : 'today'}. Pick a new date you believe in, so the forecast stays honest.`, cta: { kind: 'closedate', label: 'New date' } });
   }
 
   // 3. Stuck in stage
   const inStage = a.deal.stageEnteredAt ? daysSince(a.deal.stageEnteredAt) : 0;
   if (STAGE_DAYS[a.deal.stage] && inStage > STAGE_DAYS[a.deal.stage]) {
     const p = PLAYBOOK[a.deal.stage];
-    out.push({ type: 'stuck', priority: 'normal', icon: 'i-hourglass', tag: `Stuck ${inStage}d`, why: `${inStage} days in ${stage.label}`, title: `${inStage}d in ${stage.label}`, detail: `${inStage} days in ${stage.label}; deals usually move on within ${STAGE_DAYS[a.deal.stage]}. Next: ${p.title.toLowerCase()}.`, cta: { kind: 'stage', label: p.button, to: p.to } });
+    out.push({ type: 'stuck', priority: 'normal', icon: 'i-hourglass', tag: `Stuck ${inStage}d`, action: p.verb, why: `${inStage} days in ${stage.label}`, title: `${inStage}d in ${stage.label}`, detail: `${inStage} days in ${stage.label}; deals usually move on within ${STAGE_DAYS[a.deal.stage]}. Next: ${p.title.toLowerCase()}.`, cta: { kind: 'stage', label: p.button, to: p.to } });
   }
 
   // 4. Required info missing for the stage it's already in
   const gaps = gapsSoFar(a);
   if (gaps.length) {
     const missing = missingFields(a, gaps);
-    out.push({ type: 'details', priority: 'normal', icon: 'i-clipboard', tag: 'Info missing', why: `Missing ${missing.map((f) => f.label.toLowerCase()).join(', ')}`, title: 'Info missing', detail: `Still needed for ${stage.label}: ${missing.map((f) => f.label.toLowerCase()).join(', ')}.`, cta: { kind: 'details', label: 'Add info' } });
+    out.push({ type: 'details', priority: 'normal', icon: 'i-clipboard', tag: 'Info missing', action: 'Add the missing deal info', why: `Missing ${missing.map((f) => f.label.toLowerCase()).join(', ')}`, title: 'Info missing', detail: `Still needed for ${stage.label}: ${missing.map((f) => f.label.toLowerCase()).join(', ')}.`, cta: { kind: 'details', label: 'Add info' } });
   }
 
   // 5. Contract out
   if (a.deal.stage === 'contractsent' && !out.some((x) => x.priority === 'high')) {
-    out.push({ type: 'sign', priority: 'high', icon: 'i-pen', tag: 'Contract out', why: 'The contract is with them', title: 'Contract out', detail: `The contract is with them. Get it signed: ${money(a.deal.amount)} ARR, and closing it starts onboarding automatically.`, cta: { kind: 'stage', label: 'Mark won', to: 'closedwon' } });
+    out.push({ type: 'sign', priority: 'high', icon: 'i-pen', tag: 'Contract out', action: 'Get the contract signed', why: 'The contract is with them', title: 'Contract out', detail: `The contract is with them. Get it signed: ${money(a.deal.amount)} ARR, and closing it starts onboarding automatically.`, cta: { kind: 'stage', label: 'Mark won', to: 'closedwon' } });
   }
 
   // 6. A colleague won something similar
@@ -152,7 +152,7 @@ export function dealSignals(a) {
     const months = Math.max(1, Math.round(daysSince(w.closedAt) / 30));
     const asked = a.deal.askedColleague?.wonId === w.id;
     out.push({
-      type: 'similar', priority: 'normal', icon: 'i-users', tag: 'Similar win', why: `Won ${w.account}, a similar deal`, won: w,
+      type: 'similar', priority: 'normal', icon: 'i-users', tag: 'Similar win', action: `Ask ${first(w.owner)} how they won ${w.account}`, why: `A similar ${money(w.amount)} win, ${months === 1 ? 'a month' : `${months} months`} ago`, won: w,
       title: `Similar win: ${first(w.owner)}`,
       detail: `${w.owner} closed ${w.account} (${w.segment}, ${w.erp}, ${money(w.amount)}) ${months === 1 ? 'a month' : `${months} months`} ago. Business value: ${w.value}. What worked: ${w.how}.${asked ? '' : ` Ask ${first(w.owner)} in Slack how they did it.`}`,
       cta: asked ? null : { kind: 'ask', label: `Ask ${first(w.owner)}`, wonId: w.id },
@@ -163,7 +163,7 @@ export function dealSignals(a) {
   // 7. Nothing wrong: the next step in the playbook
   if (!out.some((x) => x.type !== 'similar' && x.type !== 'waiting')) {
     const p = PLAYBOOK[a.deal.stage];
-    if (p) out.push({ type: 'next', priority: 'low', icon: 'i-arrow', tag: 'On track', why: 'The next step in the playbook', title: 'On track', detail: `Nothing is blocking it. Next: ${p.title.toLowerCase()}. ${p.detail}`, cta: { kind: 'stage', label: p.button, to: p.to } });
+    if (p) out.push({ type: 'next', priority: 'low', icon: 'i-arrow', tag: 'On track', action: p.verb, why: 'On track: the next step', title: 'On track', detail: `Nothing is blocking it. Next: ${p.title.toLowerCase()}. ${p.detail}`, cta: { kind: 'stage', label: p.button, to: p.to } });
   }
 
   return out.sort((x, y) => RANK[x.priority] - RANK[y.priority]);
