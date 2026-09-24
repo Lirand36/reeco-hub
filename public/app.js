@@ -753,7 +753,7 @@ function snapshotPanel(a, currentId) {
   const syncTone = { ok: 'good', degraded: 'warn', failing: 'bad' }[p?.syncStatus] ?? '';
   return `
     <div class="snap-head">
-      <div class="spread"><h2>Account snapshot</h2><a class="link xs" href="#/accounts/${a.id}">Full account →</a></div>
+      <div class="spread"><h2>Account snapshot</h2><div class="row" style="gap:4px"><a class="link xs" href="#/accounts/${a.id}">Full account →</a><button class="icon-close" data-close-drawer aria-label="Close"><svg class="ico"><use href="#i-x"/></svg></button></div></div>
       <div class="snap-name">${esc(a.name)}</div>
       <div class="row" style="gap:4px;margin-top:6px">${statusChip(a.status)}<span class="chip">${esc(a.segment)}</span><span class="chip">${money(a.deal.amount)} ARR</span></div>
       <div style="margin-top:10px">${healthBar(a.health)}</div>
@@ -780,97 +780,195 @@ function snapshotPanel(a, currentId) {
     ${a.onboarding && a.status === 'Onboarding' ? `<div class="snap-sec"><h3>Onboarding</h3><p class="small">Day ${days(a.onboarding.startedAt)} · ${Object.values(a.onboarding.steps).filter((x) => x.done).length}/${state.meta.steps.length} steps</p></div>` : ''}`;
 }
 
-async function renderInbox(selectedId) {
+// ---------- inbox ----------
+// Two modes: the queue (a table, most urgent first) and one conversation at a time,
+// with the customer's account one click away in a side panel.
+const dueTime = (c) => (c.state === 'open' && c.slaDueAt ? new Date(c.slaDueAt).getTime() : Infinity);
+const INBOX_COLS = [
+  { id: 'customer', label: 'Customer', key: (c) => c.account.name.toLowerCase() },
+  { id: 'subject', label: 'Subject', key: (c) => c.subject.toLowerCase() },
+  { id: 'class', label: 'Classification', key: (c) => c.classificationLabel },
+  { id: 'due', label: 'Reply due', key: dueTime },
+  { id: 'owner', label: 'Owner', key: (c) => c.assignee ?? '~' },
+  { id: 'updated', label: 'Last message', key: (c) => -new Date(c.updatedAt).getTime() },
+];
+
+function inboxQueue(items, me) {
+  const tab = INBOX_TABS.find((t) => t.id === state.inboxTab) ?? INBOX_TABS[4];
+  state.inboxSort ??= { id: 'due', dir: 1 };
+  // Closed conversations have no reply target, so "Reply due" falls back to newest first.
+  const sortId = tab.id === 'closed' && state.inboxSort.id === 'due' ? 'updated' : state.inboxSort.id;
+  const col = INBOX_COLS.find((c) => c.id === sortId);
+  const dir = sortId === state.inboxSort.id ? state.inboxSort.dir : 1;
+  const list = items.filter((c) => tab.test(c, me.name)).sort((a, b) => {
+    const x = col.key(a), y = col.key(b);
+    return ((x < y ? -1 : x > y ? 1 : 0) * dir) || (dueTime(a) - dueTime(b));
+  });
+  return { tab, list };
+}
+
+function dueCell(i) {
+  if (i.state === 'closed') return `<span class="st calm"><svg class="ico"><use href="#i-done"/></svg>Closed: ${esc(reasonLabel(i.closeReason ?? '')) || 'no reason'}</span>`;
+  if (isSnoozed(i)) return `<span class="st info"><svg class="ico"><use href="#i-clock"/></svg>Snoozed until ${new Date(i.snoozedUntil).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</span>`;
+  const u = urgency(i);
+  return u ? `<span class="st ${u.tone}"><svg class="ico"><use href="#i-clock"/></svg>${u.text}</span>` : '<span class="muted">–</span>';
+}
+
+function renderInbox(selectedId) {
+  return selectedId ? renderConversation(selectedId) : renderInboxQueue();
+}
+
+async function renderInboxQueue() {
   const me = user();
   state.inboxTab ??= me.team === 'support' ? 'mine' : 'open';
   const [items, reasons] = await Promise.all([api('/api/inbox'), state.inboxTab === 'closed' ? api('/api/support/reasons') : null]);
-  const tab = INBOX_TABS.find((t) => t.id === state.inboxTab) ?? INBOX_TABS[4];
-  const list = items.filter((c) => tab.test(c, me.name));
-  const sel = items.find((i) => i.id === selectedId) ?? list[0];
-  const account = sel ? await api(`/api/accounts/${sel.account.id}`) : null;
-  const agents = state.meta.users.filter((u) => u.team === 'support');
+  const { tab, list } = inboxQueue(items, me);
   const maxReason = reasons ? Math.max(1, ...reasons.map((r) => r.count)) : 1;
+  state.inboxCursor = Math.min(state.inboxCursor ?? -1, list.length - 1);
+  const sortOn = tab.id === 'closed' && state.inboxSort.id === 'due' ? 'updated' : state.inboxSort.id;
 
   view.innerHTML = `
     <div class="page-head">
-      <div><h1>Inbox</h1><p class="muted">Intercom conversations with the customer's account and platform status alongside. Enterprise and angry messages are flagged to Slack.</p></div>
+      <div><h1>Inbox</h1><p class="muted">Intercom conversations, most urgent first. Open one to reply with the customer's account at hand.</p></div>
       <button class="btn" id="simulate" title="Demo: pretend a customer just wrote in through Intercom">⚡ Simulate a message</button>
     </div>
     <div class="tabs" role="tablist" aria-label="Queues">
       ${INBOX_TABS.map((t) => { const n = items.filter((c) => t.test(c, me.name)).length; return `<button role="tab" class="tab ${t.id === tab.id ? 'sel' : ''}" data-tab="${t.id}" aria-selected="${t.id === tab.id}">${esc(t.label)} <span class="num">${n}</span></button>`; }).join('')}
     </div>
-    <div class="card inbox3">
-      <div class="inbox-list">
-        ${reasons ? `<div class="reasons-chart"><div class="muted xs" style="margin-bottom:6px">Why customers contacted us</div>
-          ${reasons.filter((r) => r.count).sort((x, y) => y.count - x.count).map((r) => `<div class="rbar"><span class="xs ellipsis">${esc(r.label)}</span><div class="bar"><span style="width:${(r.count / maxReason) * 100}%"></span></div><span class="xs num">${r.count}</span></div>`).join('')}</div>` : ''}
-        ${list.map((i) => `
-          <a class="inbox-item u-${urgency(i)?.tone ?? 'none'} ${i.id === sel?.id ? 'active' : ''} ${i.id === state.flashId ? 'flash' : ''}" href="#/inbox/${esc(i.id)}">
-            <div class="ii-top"><span class="ii-name ellipsis">${esc(i.account.name)}</span>${segBadge(i.account.segment)}</div>
-            <div class="ii-top"><span class="ii-subject ellipsis">${esc(i.subject)}</span><span class="ii-time muted xs">${rel(i.updatedAt)}</span></div>
-            <div class="preview">${i.ai && i.ai.forMessages === i.messages.length ? `✨ ${esc(i.ai.summary)}` : esc(i.messages.at(-1)?.text)}</div>
-            <div class="ii-facts">
-              ${i.state === 'closed' ? `<div class="fact muted"><svg class="ico"><use href="#i-done"/></svg>Closed: ${esc(reasonLabel(i.closeReason ?? '')) || 'no reason'}</div>`
-                : isSnoozed(i) ? `<div class="fact info"><svg class="ico"><use href="#i-clock"/></svg>Snoozed until ${new Date(i.snoozedUntil).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</div>`
-                : urgency(i) ? `<div class="fact ${urgency(i).tone}"><svg class="ico"><use href="#i-clock"/></svg>${urgency(i).text}</div>` : ''}
-              <div class="fact"><svg class="ico"><use href="#i-tag"/></svg><span class="k">Classification:</span>${esc(i.classificationLabel)}${i.escalatedTo ? ` <span class="mono info-text">· ${esc(i.escalatedTo)}</span>` : ''}</div>
-              <div class="fact ${i.assignee ? '' : 'warn'}"><svg class="ico"><use href="#i-user"/></svg><span class="k">Owner:</span>${i.assignee ? esc(i.assignee) : 'Unassigned'}</div>
-            </div>
-          </a>`).join('') || `<div class="empty">${tab.id === 'mine' ? 'Nothing assigned to you. Check <b>Unassigned</b>.' : 'Nothing here.'}</div>`}
-      </div>
-
-      <div class="inbox-thread">
-        ${sel ? `
-          <div class="card-head">
-            <div class="grow"><h2>${esc(sel.subject)}</h2><div class="row" style="gap:6px;margin-top:2px"><a class="link small" href="#/accounts/${sel.account.id}">${esc(sel.account.name)} →</a>${segBadge(sel.account.segment)}</div></div>
-            ${src('intercom', `#${sel.id}`)}
-          </div>
-          ${sel.state === 'open' ? `
-          <div class="toolbar-row">
-            <label class="xs muted" for="assignee">Owner</label>
-            <select class="input sm" id="assignee">
-              <option value="">Unassigned</option>
-              ${agents.map((u) => `<option value="${esc(u.name)}" ${sel.assignee === u.name ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}
-            </select>
-            ${me.team === 'support' && sel.assignee !== me.name ? '<button class="btn sm" id="take">Assign to me</button>' : ''}
-            ${isSnoozed(sel) ? '<button class="btn sm" id="unsnooze">Unsnooze</button>'
-              : `<select class="input sm" id="snooze" aria-label="Snooze"><option value="">Snooze…</option>${snoozeOptions().map(([l, d]) => `<option value="${d.toISOString()}">${l}</option>`).join('')}</select>`}
-            <span class="grow"></span>
-            <div class="decide">
-              ${sel.escalatedTo ? `<span class="st info"><svg class="ico"><use href="#i-alert"/></svg>With engineering · ${esc(sel.escalatedTo)}</span>` : '<button class="btn sm btn-escalate" id="escalate"><svg class="ico"><use href="#i-alert"/></svg>Escalate to engineering</button>'}
-              <span class="vr" aria-hidden="true"></span>
-              <button class="btn sm btn-close" id="close"><svg class="ico"><use href="#i-done"/></svg>Close conversation</button>
-            </div>
-          </div>` : ''}
-          <div class="ctx">
-            ${urgency(sel) ? `<span class="st ${urgency(sel).tone}"><svg class="ico"><use href="#i-clock"/></svg>${urgency(sel).text}</span>` : ''}
-            <label class="st calm" for="classify"><svg class="ico"><use href="#i-tag"/></svg>Classification</label>
-            ${sel.state === 'open' ? `<select class="input sm" id="classify" title="Correct the classification if it's wrong">
-              ${state.meta.classifications.map((k) => { const tool = k.id === 'integration' ? (sel.classification?.tool ?? sel.account.platformErp) : null; return `<option value="${k.id}" ${sel.classification?.id === k.id ? 'selected' : ''}>${esc(k.label)}${tool ? ` · ${esc(tool)}` : ''}</option>`; }).join('')}
-            </select>` : `<span class="small">${esc(sel.classificationLabel)}</span>`}
-            ${isSnoozed(sel) ? `<span class="chip info">Snoozed until ${new Date(sel.snoozedUntil).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })} (reply target still running)</span>` : ''}
-          </div>
-          ${aiCard(sel)}
-          ${conversationBlock(sel)}` : '<div class="empty">Select a conversation.</div>'}
-      </div>
-
-      <aside class="snapshot" aria-label="Account snapshot">${account ? snapshotPanel(account, sel.id) : ''}</aside>
+    ${reasons ? `<div class="card card-pad reasons-card"><div class="muted small" style="margin-bottom:8px">Why customers contacted us</div>
+      ${reasons.filter((r) => r.count).sort((x, y) => y.count - x.count).map((r) => `<div class="rbar"><span class="xs ellipsis">${esc(r.label)}</span><div class="bar"><span style="width:${(r.count / maxReason) * 100}%"></span></div><span class="xs num">${r.count}</span></div>`).join('')}</div>` : ''}
+    <div class="card table-wrap">
+      <table class="table inbox-table">
+        <thead><tr>${INBOX_COLS.map((c) => {
+          const on = c.id === sortOn;
+          const dir = on && c.id === state.inboxSort.id ? state.inboxSort.dir : 1;
+          return `<th aria-sort="${on ? (dir === 1 ? 'ascending' : 'descending') : 'none'}"><button class="th-sort" data-isort="${c.id}">${esc(c.id === 'due' && tab.id === 'closed' ? 'Outcome' : c.label)}<span class="sort-ind" aria-hidden="true">${on ? (dir === 1 ? '▲' : '▼') : ''}</span></button></th>`;
+        }).join('')}</tr></thead>
+        <tbody>${list.map((i, n) => `
+          <tr data-href="#/inbox/${esc(i.id)}" class="u-${urgency(i)?.tone ?? 'none'} ${n === state.inboxCursor ? 'cursor' : ''} ${i.id === state.flashId ? 'flash' : ''}">
+            <td data-label="Customer"><a class="row-link" href="#/inbox/${esc(i.id)}">${esc(i.account.name)}</a> ${segBadge(i.account.segment)}</td>
+            <td data-label="Subject" class="subj"><div class="ellipsis" style="font-weight:500">${esc(i.subject)}</div><div class="muted xs ellipsis">${i.ai && i.ai.forMessages === i.messages.length ? `✨ ${esc(i.ai.summary)}` : esc(i.messages.at(-1)?.text)}</div></td>
+            <td data-label="Classification" class="small">${esc(i.classificationLabel)}${i.escalatedTo ? `<div class="mono info-text xs">${esc(i.escalatedTo)}</div>` : ''}</td>
+            <td data-label="Reply due">${dueCell(i)}</td>
+            <td data-label="Owner" class="small ${i.assignee ? '' : 'tone-warn'}">${i.assignee ? esc(i.assignee) : 'Unassigned'}</td>
+            <td data-label="Last message" class="small muted">${rel(i.updatedAt)}</td>
+          </tr>`).join('') || `<tr><td colspan="${INBOX_COLS.length}" class="empty">${tab.id === 'mine' ? 'Nothing assigned to you. Check <b>Unassigned</b>.' : 'Nothing here.'}</td></tr>`}</tbody>
+      </table>
     </div>`;
   state.flashId = null;
 
-  $$('[data-tab]').forEach((b) => b.addEventListener('click', () => { state.inboxTab = b.dataset.tab; location.hash = '#/inbox'; route(); }));
+  $$('[data-tab]').forEach((b) => b.addEventListener('click', () => { state.inboxTab = b.dataset.tab; state.inboxCursor = -1; renderInboxQueue(); }));
+  $$('[data-isort]').forEach((b) => b.addEventListener('click', () => {
+    const same = state.inboxSort.id === b.dataset.isort;
+    state.inboxSort = { id: b.dataset.isort, dir: same ? -state.inboxSort.dir : 1 };
+    renderInboxQueue();
+  }));
+  $$('.inbox-table tbody tr[data-href]').forEach((tr) => tr.addEventListener('click', (e) => { if (!e.target.closest('a')) location.hash = tr.dataset.href; }));
+  bindSimulate();
+}
+
+// A one-line account summary that opens the full snapshot in a side panel.
+function accountStrip(a) {
+  const p = a.platform;
+  const syncTone = { ok: 'good', degraded: 'warn', failing: 'bad' }[p?.syncStatus] ?? '';
+  const tickets = a.tickets.filter((t) => t.status !== 'Done').length;
+  const bit = (k, v) => `<span class="as-item"><span class="muted">${k}</span> ${v}</span>`;
+  return `<button class="acct-strip" id="open-snap" type="button" aria-haspopup="dialog">
+    <svg class="ico" aria-hidden="true"><use href="#i-building"/></svg>
+    <span class="as-item" style="font-weight:600">${esc(a.name)}</span>
+    ${a.health != null ? riskChip(a.healthLevel, a.health) : statusChip(a.status)}
+    ${bit('ARR', money(a.deal.amount))}
+    ${p ? bit(esc(p.erp), `<span class="chip ${syncTone}">${esc(p.syncStatus)}</span>`) : ''}
+    ${bit('Open tickets', `<span class="${tickets ? 'tone-warn' : ''}">${tickets}</span>`)}
+    ${bit('CSM', esc(a.csm))}
+    <span class="grow"></span><span class="link small as-more">Account details<svg class="ico"><use href="#i-arrow"/></svg></span>
+  </button>`;
+}
+
+function openDrawer(html) {
+  const dlg = $('#drawer');
+  dlg.innerHTML = html;
+  if (!dlg.open) dlg.showModal();
+  $('[data-close-drawer]', dlg)?.addEventListener('click', () => dlg.close());
+}
+const drawerHtml = (a, currentId) => snapshotPanel(a, currentId);
+
+async function renderConversation(id) {
+  const me = user();
+  state.inboxTab ??= me.team === 'support' ? 'mine' : 'open';
+  const items = await api('/api/inbox');
+  const sel = items.find((i) => i.id === id);
+  if (!sel) { view.innerHTML = '<div class="empty">This conversation no longer exists. <a class="link" href="#/inbox">Back to the inbox</a></div>'; return; }
+  // Keep prev/next inside a queue that actually holds this conversation.
+  if (!INBOX_TABS.find((t) => t.id === state.inboxTab)?.test(sel, me.name)) state.inboxTab = INBOX_TABS.find((t) => t.test(sel, me.name))?.id ?? 'open';
+  const { tab, list } = inboxQueue(items, me);
+  const pos = list.findIndex((i) => i.id === sel.id);
+  const prev = list[pos - 1], next = list[pos + 1];
+  const account = await api(`/api/accounts/${sel.account.id}`);
+  const agents = state.meta.users.filter((u) => u.team === 'support');
+
+  view.innerHTML = `
+    <div class="spread conv-top">
+      <nav class="crumbs" aria-label="Breadcrumb" style="margin:0"><a href="#/inbox">Inbox · ${esc(tab.label)}</a><span aria-hidden="true" class="sep">/</span><span aria-current="page" class="ellipsis">${esc(sel.subject)}</span></nav>
+      <div class="row conv-pager" style="gap:6px">
+        <a class="btn sm ${prev ? '' : 'disabled'}" ${prev ? `href="#/inbox/${esc(prev.id)}"` : 'aria-disabled="true"'} id="prev" title="Previous (K)">‹ Previous</a>
+        <span class="muted small">${pos + 1} of ${list.length}</span>
+        <a class="btn sm ${next ? '' : 'disabled'}" ${next ? `href="#/inbox/${esc(next.id)}"` : 'aria-disabled="true"'} id="next" title="Next (J)">Next ›</a>
+      </div>
+    </div>
+    <div class="card conv">
+      <div class="card-head">
+        <div class="grow"><h2>${esc(sel.subject)}</h2><div class="row" style="gap:6px;margin-top:2px"><span class="small">${esc(sel.account.name)}</span>${segBadge(sel.account.segment)}</div></div>
+        ${src('intercom', `#${sel.id}`)}
+      </div>
+      ${accountStrip(account)}
+      ${sel.state === 'open' ? `
+      <div class="toolbar-row">
+        <label class="xs muted" for="assignee">Owner</label>
+        <select class="input sm" id="assignee">
+          <option value="">Unassigned</option>
+          ${agents.map((u) => `<option value="${esc(u.name)}" ${sel.assignee === u.name ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}
+        </select>
+        ${me.team === 'support' && sel.assignee !== me.name ? '<button class="btn sm" id="take">Assign to me</button>' : ''}
+        ${isSnoozed(sel) ? '<button class="btn sm" id="unsnooze">Unsnooze</button>'
+          : `<select class="input sm" id="snooze" aria-label="Snooze"><option value="">Snooze…</option>${snoozeOptions().map(([l, d]) => `<option value="${d.toISOString()}">${l}</option>`).join('')}</select>`}
+        <span class="grow"></span>
+        <div class="decide">
+          ${sel.escalatedTo ? `<span class="st info"><svg class="ico"><use href="#i-alert"/></svg>With engineering · ${esc(sel.escalatedTo)}</span>` : '<button class="btn sm btn-escalate" id="escalate"><svg class="ico"><use href="#i-alert"/></svg>Escalate to engineering</button>'}
+          <span class="vr" aria-hidden="true"></span>
+          <button class="btn sm btn-close" id="close"><svg class="ico"><use href="#i-done"/></svg>Close conversation</button>
+        </div>
+      </div>` : ''}
+      <div class="ctx">
+        ${urgency(sel) ? `<span class="st ${urgency(sel).tone}"><svg class="ico"><use href="#i-clock"/></svg>${urgency(sel).text}</span>` : ''}
+        <label class="st calm" for="classify"><svg class="ico"><use href="#i-tag"/></svg>Classification</label>
+        ${sel.state === 'open' ? `<select class="input sm" id="classify" title="Correct the classification if it's wrong">
+          ${state.meta.classifications.map((k) => { const tool = k.id === 'integration' ? (sel.classification?.tool ?? sel.account.platformErp) : null; return `<option value="${k.id}" ${sel.classification?.id === k.id ? 'selected' : ''}>${esc(k.label)}${tool ? ` · ${esc(tool)}` : ''}</option>`; }).join('')}
+        </select>` : `<span class="small">${esc(sel.classificationLabel)}</span>`}
+        ${isSnoozed(sel) ? `<span class="chip info">Snoozed until ${new Date(sel.snoozedUntil).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })} (reply target still running)</span>` : ''}
+      </div>
+      ${aiCard(sel)}
+      ${conversationBlock(sel)}
+    </div>`;
+
+  // Keep an open account panel in sync with live updates.
+  if ($('#drawer').open) openDrawer(drawerHtml(account, sel.id));
+  $('#open-snap').addEventListener('click', () => openDrawer(drawerHtml(account, sel.id)));
   bindReplies(view);
-  if (!sel) return;
-  const act = (btn, path, body, msg) => run(btn, async () => {
+  // Closing or snoozing takes it out of the queue, so move on to the next one.
+  const after = next ?? prev;
+  const moveOn = () => { location.hash = after ? `#/inbox/${after.id}` : '#/inbox'; };
+  const act = (btn, path, body, leaves) => run(btn, async () => {
     await api(`/api/conversations/${sel.id}/${path}`, { method: 'POST', body });
-    route({ keepScroll: true });
+    if (leaves) moveOn(); else route({ keepScroll: true });
   });
   $('#classify')?.addEventListener('change', (e) => act(e.target, 'classify', { id: e.target.value }));
   $('#assignee')?.addEventListener('change', (e) => act(e.target, 'assign', { assignee: e.target.value || null }));
-  $('#take')?.addEventListener('click', (e) => act(e.currentTarget, 'assign', { assignee: me.name }, 'Assigned to you'));
-  $('#snooze')?.addEventListener('change', (e) => e.target.value && act(e.target, 'snooze', { until: e.target.value }, 'Snoozed. It comes back when the time is up or the customer replies.'));
+  $('#take')?.addEventListener('click', (e) => act(e.currentTarget, 'assign', { assignee: me.name }));
+  $('#snooze')?.addEventListener('change', (e) => e.target.value && act(e.target, 'snooze', { until: e.target.value }, true));
   $('#unsnooze')?.addEventListener('click', (e) => act(e.currentTarget, 'snooze', { until: null }));
   $('#escalate')?.addEventListener('click', async (e) => { const btn = e.currentTarget; if (await confirmEscalate()) act(btn, 'escalate'); });
-  $('#close')?.addEventListener('click', (e) => { const btn = e.currentTarget; pickCloseReason(sel.suggestedCloseReason, (reason) => act(btn, 'close', { reason }, `Closed as “${reasonLabel(reason)}”`)); });
+  $('#close')?.addEventListener('click', (e) => { const btn = e.currentTarget; pickCloseReason(sel.suggestedCloseReason, (reason) => act(btn, 'close', { reason }, true)); });
   $('#ai-run')?.addEventListener('click', (e) => act(e.currentTarget, 'ai'));
   $('#ai-use')?.addEventListener('click', () => {
     const ta = $('form.reply textarea');
@@ -878,7 +976,9 @@ async function renderInbox(selectedId) {
     ta.focus();
     ta.style.height = `${Math.min(ta.scrollHeight + 4, 260)}px`;
   });
+}
 
+function bindSimulate() {
   $('#simulate').addEventListener('click', () => openModal(`
     <h2>Simulate a customer message</h2>
     <p class="muted small" style="margin-bottom:10px">Sends the hub the same notification Intercom sends when a customer writes in.</p>
@@ -1256,6 +1356,7 @@ const SHORTCUTS = [
   ['/', 'Search'],
   ['G then H', 'Good morning'], ['G then P', 'Pipeline'], ['G then I', 'Inbox'], ['G then M', 'My portfolio'], ['G then O', 'Onboarding'], ['G then R', 'Feature requests'], ['G then A', 'Accounts'], ['G then L', 'Activity log'],
   ['J / K', 'Next / previous conversation (Inbox)'],
+  ['Enter', 'Open the highlighted conversation (Inbox)'],
   ['?', 'This help'],
 ];
 
@@ -1373,7 +1474,7 @@ let gPending = 0;
 function onKey(e) {
   const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName) || document.activeElement?.isContentEditable;
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openPalette(); return; }
-  if (typing || e.ctrlKey || e.metaKey || e.altKey || $('#modal').open || $('#palette').open) return;
+  if (typing || e.ctrlKey || e.metaKey || e.altKey || $('#modal').open || $('#palette').open || $('#drawer').open) return;
   if (e.key === '/') { e.preventDefault(); openPalette(); return; }
   if (e.key === '?') { e.preventDefault(); openHelp(); return; }
   if (e.key === 'Escape' && !$('#user-menu').hidden) { toggleUserMenu(false); $('#user-btn').focus(); return; }
@@ -1383,12 +1484,17 @@ function onKey(e) {
     gPending = 0;
     if (dest) { location.hash = dest; return; }
   }
-  if (location.hash.startsWith('#/inbox') && (e.key === 'j' || e.key === 'k')) {
-    const items = $$('.inbox-item');
-    const idx = items.findIndex((x) => x.classList.contains('active'));
-    const next = items[Math.min(Math.max(idx + (e.key === 'j' ? 1 : -1), 0), items.length - 1)];
-    if (next) location.hash = next.getAttribute('href');
+  if (location.hash.startsWith('#/inbox/') && (e.key === 'j' || e.key === 'k')) {
+    $(e.key === 'j' ? '#next[href]' : '#prev[href]')?.click();
+  } else if (/^#\/inbox\/?$/.test(location.hash) && /^[jk]$|^Enter$/.test(e.key)) {
+    const rows = $$('.inbox-table tbody tr[data-href]');
+    if (!rows.length) return;
+    if (e.key === 'Enter') { if (document.activeElement.closest('a, button')) return; if (rows[state.inboxCursor]) location.hash = rows[state.inboxCursor].dataset.href; return; }
+    state.inboxCursor = Math.min(Math.max((state.inboxCursor ?? -1) + (e.key === 'j' ? 1 : -1), 0), rows.length - 1);
+    rows.forEach((r, i) => r.classList.toggle('cursor', i === state.inboxCursor));
+    rows[state.inboxCursor].scrollIntoView({ block: 'nearest' });
   }
+
 }
 
 // ---------- router ----------
@@ -1449,6 +1555,7 @@ async function init() {
   document.addEventListener('click', (e) => { if (!$('#user-menu').hidden && !e.target.closest('.sidebar-foot')) toggleUserMenu(false); });
   $('#search-btn').addEventListener('click', openPalette);
   document.addEventListener('keydown', onKey);
+  $('#drawer').addEventListener('click', (e) => { if (e.target === e.currentTarget) e.currentTarget.close(); }); // backdrop
   addEventListener('hashchange', () => { route(); });
   setInterval(() => { if (/^#\/(inbox|accounts\/)/.test(location.hash)) scheduleRender(); }, 60_000); // reply-due countdowns
   connectEvents();
