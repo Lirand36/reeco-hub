@@ -124,7 +124,7 @@ export function dealSignals(a) {
   // 2. Close date passed
   if (a.deal.closeDate && new Date(a.deal.closeDate) < new Date()) {
     const d = daysSince(a.deal.closeDate);
-    out.push({ type: 'overdue', priority: 'high', icon: '📅', title: `Close date passed ${d ? `${d} days ago` : 'today'}`, detail: 'Set a realistic date so the forecast stays honest, or push to close.', cta: { kind: 'closedate', label: 'Update close date' } });
+    out.push({ type: 'overdue', priority: 'high', icon: '📅', title: `Close date passed ${d ? `${d} days ago` : 'today'}`, detail: 'Pick a new date you believe in, so the forecast stays honest.', cta: { kind: 'closedate', label: 'Update close date' } });
   }
 
   // 3. Stuck in stage
