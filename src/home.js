@@ -40,7 +40,7 @@ function support(user) {
     return {
       id: `reply-${c.id}`, priority, icon: c.assignee ? 'i-mail' : 'i-inbox', sort: m ?? 9999,
       title: c.assignee ? `Reply to ${last.author} at ${a.name}` : `Unassigned: ${last.author} at ${a.name}`,
-      detail: c.ai && c.ai.forMessages === c.messages.length ? `✨ ${c.ai.summary}` : `“${last.text.length > 120 ? last.text.slice(0, 117) + '…' : last.text}”`,
+      detail: c.ai && c.ai.forMessages === c.messages.length ? `AI summary: ${c.ai.summary}` : `“${last.text.length > 120 ? last.text.slice(0, 117) + '…' : last.text}”`,
       badge: a.segment === 'Enterprise' ? 'Enterprise' : null,
       tags: [
         m == null ? null : m < 0 ? { text: `Reply overdue ${fmtMins(-m)}`, tone: 'bad' } : { text: `Reply due in ${fmtMins(m)}`, tone: m <= 30 ? 'warn' : '' },

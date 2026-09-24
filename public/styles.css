@@ -247,9 +247,6 @@ textarea.input { resize: vertical; min-height: 44px; }
 .pip.on { background: var(--brand); }
 
 /* ---------- approvals ---------- */
-.approval { padding: 18px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center; }
-.approval + .approval { border-top: 1px solid var(--border); }
-.quote { border-left: 3px solid var(--border-strong); padding-left: 10px; color: var(--muted); font-size: 13.5px; margin-top: 6px; }
 
 /* ---------- log ---------- */
 .filters { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -573,7 +570,6 @@ h3.sub { font-size: 13px; font-weight: 600; margin: 16px 0 6px; }
   .main { padding: 18px 16px 90px; }
   .hide-sm { display: none; }
   .log-row summary { grid-template-columns: 80px minmax(0, 1fr) 44px; }
-  .approval { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* ---------- inbox: queue table + conversation ---------- */
@@ -702,3 +698,43 @@ dialog:has(.wide-form) { width: min(560px, calc(100vw - 32px)); }
 }
 .deal-sa .sa-ico, .deal-sa .sa-go { display: none; }
 .deal-sa .sa { padding: 7px 10px; }
+
+/* line icons everywhere (no emoji) */
+.btn .ico { width: 16px; height: 16px; }
+.btn.sm .ico { width: 14px; height: 14px; }
+.chip .ico { width: 12px; height: 12px; }
+.banner .ico { width: 16px; height: 16px; }
+.ico.inline { width: 12px; height: 12px; vertical-align: -2px; margin-right: 4px; color: var(--brand-ink); }
+.ai-title { display: inline-flex; align-items: center; gap: 6px; }
+.ai-title .ico, .empty-ai .ico { width: 16px; height: 16px; color: var(--brand-ink); }
+.empty-ai > span { display: inline-flex; align-items: center; gap: 6px; }
+.t-ico { display: grid; place-items: center; }
+.t-ico .ico { width: 18px; height: 18px; color: var(--dot, var(--brand-ink)); }
+.act-ico .ico { width: 16px; height: 16px; color: var(--brand-ink); }
+.act-ico.t-info .ico { color: var(--info); }
+.act-ico.t-warn .ico { color: var(--warn); }
+.act-ico.t-bad .ico { color: var(--bad); }
+.step-mark .ico { width: 12px; height: 12px; stroke-width: 2.4; }
+
+/* approvals table */
+.apr-table td { vertical-align: top; }
+.apr-reason { max-width: 320px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.apr-decision { white-space: nowrap; }
+.apr-sim { margin-top: 4px; padding-left: 0; color: var(--brand-ink); }
+@media (max-width: 760px) {
+  .apr-table thead { display: none; }
+  .apr-table tbody tr[data-href] { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .apr-table tbody td { display: block; padding: 0; border: 0; max-width: none; white-space: normal; }
+  .apr-table td[data-label="Deal"], .apr-table td[data-label="Reason"], .apr-table td[data-label="Decision"] { grid-column: 1 / -1; }
+  .apr-table td.num-col { text-align: left; }
+  .apr-table td[data-label="Discount"]::before, .apr-table td[data-label="ARR after discount"]::before, .apr-table td[data-label="Requested"]::before { content: attr(data-label); display: block; font-size: 11px; color: var(--muted); font-weight: 400; }
+}
+
+/* account page: suggested actions under the deal, finished onboarding folded */
+.acct-sa { padding: 12px 18px 16px; border-top: 1px solid var(--border); }
+.acct-sa .sa-grid { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+details.onb-card { padding: 0; display: block; }
+details.onb-card > summary { list-style: none; cursor: pointer; }
+details.onb-card > summary::-webkit-details-marker { display: none; }
+details.onb-card:not([open]) > summary { border-bottom: 0; }
+details.onb-card[open] .onb-toggle { visibility: hidden; }
