@@ -174,6 +174,14 @@ function frStatus(status) {
   return `<span class="fr-status" title="${esc(frLabel(status))}"><span class="fr-dots" aria-hidden="true">${FR_FLOW.map((_, k) => `<span class="${k <= i ? 'on' : ''} ${status === 'shipped' ? 'shipped' : ''}"></span>`).join('')}</span><span class="${status === 'shipped' ? 'tone-good' : ''}">${esc(frLabel(status))}</span></span>`;
 }
 
+// Shared by the Feature requests page and the account's Requests tab.
+function frCustomerCell(f, r) {
+  if (f.status === 'shipped') return r.notified ? '<span class="chip good">Told</span>' : `<button class="btn sm primary" data-tell="${esc(f.id)}" data-account="${esc(r.accountId)}">Tell the customer</button>`;
+  if (f.status === 'declined') return '<span class="muted small">Not planned</span>';
+  return '<span class="muted small">Waiting on product</span>';
+}
+const frSimBtn = (f) => (f.next ? `<button class="fr-sim" data-advance="${esc(f.id)}" title="Demo: simulate a Jira update → ${esc(frLabel(f.next))}" aria-label="Simulate Jira update to ${esc(frLabel(f.next))}"><svg class="ico"><use href="#i-arrow"/></svg></button>` : '');
+
 // ---------- good morning ----------
 function ctaButton(c, primary) {
   if (!c) return '';
@@ -473,18 +481,20 @@ function requestsPanel(a) {
   return `
     <section class="card">
       <div class="card-head"><div><h2>Feature requests from ${esc(a.name)}</h2><div class="muted small">Tracked in Jira. You're notified in Slack whenever one moves.</div></div>${src('jira')}</div>
-      ${list.map((f) => {
-        const mine = f.accounts.find((r) => r.accountId === a.id);
-        const others = f.accounts.filter((r) => r.accountId !== a.id);
-        return `<div class="list-item fr-row">
-          <div class="grow">
-            <div style="font-weight:500">${esc(f.title)} <span class="mono muted xs">${esc(f.jiraKey)}</span></div>
-            <div class="muted xs">Asked ${rel(mine.requestedAt)}${others.length ? ` · also asked by ${others.map((r) => esc(r.name)).join(', ')} (${moneyCompact(f.arr)} ARR in total)` : ''}</div>
-          </div>
-          ${frStatus(f.status)}
-          ${f.status === 'shipped' ? (mine.notified ? '<span class="chip good">Customer told</span>' : `<button class="btn sm primary" data-tell="${esc(f.id)}" data-account="${esc(a.id)}">Tell the customer</button>`) : ''}
-        </div>`;
-      }).join('') || '<div class="empty">No feature requests yet. Support conversations closed as “Feature request” show up here automatically.</div>'}
+      ${list.length ? `<div class="table-wrap"><table class="table fr-table">
+        <thead><tr><th>Request</th><th>Status</th><th>Asked</th><th>Also asked by</th><th>Customer</th></tr></thead>
+        <tbody>${list.map((f) => {
+          const mine = f.accounts.find((r) => r.accountId === a.id);
+          const others = f.accounts.filter((r) => r.accountId !== a.id);
+          return `<tr>
+            <td data-label="Request"><div style="font-weight:500">${esc(f.title)}</div><div class="mono muted xs">${esc(f.jiraKey)}</div></td>
+            <td data-label="Status"><div class="row" style="gap:6px;flex-wrap:nowrap">${frStatus(f.status)}${frSimBtn(f)}</div><div class="muted xs">Updated ${rel(f.updatedAt)}</div></td>
+            <td data-label="Asked" class="small">${rel(mine.requestedAt)}</td>
+            <td data-label="Also asked by" class="small">${others.length ? `${others.map((r) => `<a class="link" href="#/accounts/${esc(r.accountId)}?tab=requests">${esc(r.name)}</a>`).join(', ')}<div class="muted xs">${moneyCompact(f.arr)} ARR asking in total</div>` : '<span class="muted">No one else yet</span>'}</td>
+            <td data-label="Customer">${frCustomerCell(f, mine)}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>` : '<div class="empty">No feature requests yet. Support conversations closed as “Feature request” show up here automatically.</div>'}
     </section>`;
 }
 
@@ -942,52 +952,94 @@ async function renderPortfolio() {
 }
 
 // ---------- feature requests ----------
+// One row per account × request, so it's always clear who asked for what.
 async function renderRequests() {
   const me = user();
   state.frScope ??= me.team === 'cs' ? 'mine' : 'all';
   state.frStatus ??= 'active';
+  state.frGroup ??= 'account';
   const all = await api('/api/feature-requests');
-  const scoped = all.filter((f) => state.frScope === 'all' || f.accounts.some((r) => r.csm === me.name));
+  const rows = all.flatMap((f) => f.accounts
+    .filter((r) => state.frScope === 'all' || r.csm === me.name)
+    .map((r) => ({ ...r, fr: f })));
   const filters = [
-    ['active', 'Open', (f) => !['shipped', 'declined'].includes(f.status)],
-    ['shipped', 'Shipped', (f) => f.status === 'shipped'],
-    ['declined', 'Declined', (f) => f.status === 'declined'],
+    ['active', 'Open', (x) => !['shipped', 'declined'].includes(x.fr.status)],
+    ['shipped', 'Shipped', (x) => x.fr.status === 'shipped'],
+    ['declined', 'Declined', (x) => x.fr.status === 'declined'],
     ['all', 'All', () => true],
   ];
   const test = filters.find((x) => x[0] === state.frStatus)[2];
-  const list = scoped.filter(test).sort((x, y) => y.arr - x.arr);
-  const toTell = scoped.flatMap((f) => (f.status === 'shipped' ? f.accounts.filter((r) => !r.notified && (state.frScope === 'all' || r.csm === me.name)) : []));
+  const list = rows.filter(test);
+  const toTell = rows.filter((x) => x.fr.status === 'shipped' && !x.notified);
+  const statusOrder = [...FR_FLOW, 'declined'];
+
+  // Build groups: key → { head, rows, sortKey }.
+  const groups = new Map();
+  for (const x of list) {
+    const key = state.frGroup === 'account' ? x.accountId : state.frGroup === 'request' ? x.fr.id : x.fr.status;
+    if (!groups.has(key)) groups.set(key, { key, first: x, rows: [] });
+    groups.get(key).rows.push(x);
+  }
+  const ordered = [...groups.values()].sort((a, b) => (state.frGroup === 'status'
+    ? statusOrder.indexOf(b.key) - statusOrder.indexOf(a.key)
+    : state.frGroup === 'account' ? b.first.arr - a.first.arr : b.first.fr.arr - a.first.fr.arr));
+  ordered.forEach((g) => g.rows.sort((a, b) => (state.frGroup === 'request' ? b.arr - a.arr : b.fr.arr - a.fr.arr)));
+
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  const groupHead = (g) => {
+    const x = g.first;
+    if (state.frGroup === 'account') {
+      return `<a class="link" href="#/accounts/${esc(x.accountId)}?tab=requests">${esc(x.name)}</a> ${segBadge(x.segment)}
+        <span class="muted xs">${moneyCompact(x.arr)} ARR${state.frScope === 'all' ? ` · CSM ${esc(x.csm)}` : ''} · ${plural(g.rows.length, 'request')}</span>`;
+    }
+    if (state.frGroup === 'request') {
+      return `<b>${esc(x.fr.title)}</b> <span class="mono muted xs">${esc(x.fr.jiraKey)}</span>
+        <span class="muted xs">${plural(g.rows.length, 'account')} · ${moneyCompact(g.rows.reduce((n, r) => n + r.arr, 0))} ARR asking</span>`;
+    }
+    return `<b>${esc(frLabel(g.key))}</b> <span class="muted xs">${plural(g.rows.length, 'request')}</span>`;
+  };
+  const showAccount = state.frGroup !== 'account';
+  const showRequest = state.frGroup !== 'request';
+  const showStatus = state.frGroup === 'account'; // other groupings show status in the header
+  const cols = 2 + showAccount + showRequest + showStatus;
+  const row = (x) => `<tr>
+    ${showAccount ? `<td data-label="Account"><a class="link" href="#/accounts/${esc(x.accountId)}?tab=requests">${esc(x.name)}</a> ${segBadge(x.segment)}<div class="muted xs">${moneyCompact(x.arr)} ARR${state.frScope === 'all' ? ` · CSM ${esc(x.csm)}` : ''}</div></td>` : ''}
+    ${showRequest ? `<td data-label="Request"><div style="font-weight:500">${esc(x.fr.title)}</div><div class="row" style="gap:6px"><span class="mono muted xs">${esc(x.fr.jiraKey)}</span>${showStatus ? '' : frSimBtn(x.fr)}</div></td>` : ''}
+    ${showStatus ? `<td data-label="Status"><div class="row" style="gap:6px;flex-wrap:nowrap">${frStatus(x.fr.status)}${frSimBtn(x.fr)}</div><div class="muted xs">Updated ${rel(x.fr.updatedAt)}</div></td>` : ''}
+    <td data-label="Asked" class="small">${rel(x.requestedAt)}</td>
+    <td data-label="Customer">${frCustomerCell(x.fr, x)}</td>
+  </tr>`;
 
   view.innerHTML = `
     <div class="page-head">
-      <div><h1>Feature requests</h1><p class="muted">What customers asked for, where it stands in Jira, and who to tell when it ships. Ranked by the ARR asking.</p></div>
+      <div><h1>Feature requests</h1><p class="muted">Who asked for what, where it stands in Jira, and who to tell when it ships.</p></div>
       <div class="seg seg-inline" role="group" aria-label="Scope">
-        <button class="${state.frScope === 'mine' ? 'sel' : ''}" data-frscope="mine">My accounts</button>
-        <button class="${state.frScope === 'all' ? 'sel' : ''}" data-frscope="all">All accounts</button>
+        <button class="${state.frScope === 'mine' ? 'sel' : ''}" data-frscope="mine" aria-pressed="${state.frScope === 'mine'}">My accounts</button>
+        <button class="${state.frScope === 'all' ? 'sel' : ''}" data-frscope="all" aria-pressed="${state.frScope === 'all'}">All accounts</button>
       </div>
     </div>
     ${toTell.length ? `<div class="card callout"><svg class="ico"><use href="#i-bulb"/></svg><div class="grow"><b>${toTell.length} ${toTell.length === 1 ? 'customer is' : 'customers are'} waiting to hear</b> that their request shipped.</div><button class="btn sm" data-frfilter="shipped">Show shipped</button></div>` : ''}
-    <div class="filters" style="margin-bottom:12px">${filters.map(([id, label, t]) => `<span class="chip ${state.frStatus === id ? 'sel' : ''}" role="button" tabindex="0" data-frfilter="${id}">${label} · ${scoped.filter(t).length}</span>`).join('')}</div>
-    <div class="card">
-      ${list.map((f) => `
-        <div class="fr-item">
-          <div class="spread" style="align-items:flex-start">
-            <div class="grow">
-              <div style="font-weight:600">${esc(f.title)} <span class="mono muted xs">${esc(f.jiraKey)}</span></div>
-              <div class="muted xs">Updated ${rel(f.updatedAt)} · ${f.accounts.length} ${f.accounts.length === 1 ? 'account' : 'accounts'} · ${moneyCompact(f.arr)} ARR asking</div>
-            </div>
-            ${frStatus(f.status)}
-          </div>
-          <div class="fr-accounts">
-            ${f.accounts.map((r) => `<span class="fr-acct">
-              <a class="link small" href="#/accounts/${esc(r.accountId)}?tab=requests">${esc(r.name)}</a>${segBadge(r.segment)}
-              ${f.status === 'shipped' ? (r.notified ? '<span class="chip good">Told</span>' : `<button class="btn sm primary" data-tell="${esc(f.id)}" data-account="${esc(r.accountId)}">Tell the customer</button>`) : ''}
-            </span>`).join('')}
-            ${f.next ? `<button class="btn sm ghost fr-sim" data-advance="${esc(f.id)}" title="Demo: behaves like Jira's webhook when the issue moves">Simulate Jira update → ${esc(frLabel(f.next))}</button>` : ''}
-          </div>
-        </div>`).join('') || '<div class="empty">Nothing here.</div>'}
+    <div class="spread fr-toolbar">
+      <div class="filters">${filters.map(([id, label, t]) => `<span class="chip ${state.frStatus === id ? 'sel' : ''}" role="button" tabindex="0" aria-pressed="${state.frStatus === id}" data-frfilter="${id}">${label} · ${rows.filter(t).length}</span>`).join('')}</div>
+      <div class="row" style="gap:8px"><span class="muted small">Group by</span>
+        <div class="seg seg-inline" role="group" aria-label="Group by">
+          ${[['account', 'Account'], ['request', 'Request'], ['status', 'Status']].map(([id, label]) => `<button class="${state.frGroup === id ? 'sel' : ''}" data-frgroup="${id}" aria-pressed="${state.frGroup === id}">${label}</button>`).join('')}
+        </div>
+      </div>
+    </div>
+    <div class="card table-wrap">
+      <table class="table fr-table">
+        <thead><tr>
+          ${showAccount ? '<th>Account</th>' : ''}${showRequest ? '<th>Request</th>' : ''}${showStatus ? '<th>Status</th>' : ''}<th>Asked</th><th>Customer</th>
+        </tr></thead>
+        ${ordered.map((g) => `<tbody>
+          <tr class="group-row"><th colspan="${cols}" scope="rowgroup"><div class="row" style="gap:8px">${groupHead(g)}${state.frGroup === 'request' ? `<span class="grow"></span>${frStatus(g.first.fr.status)}${frSimBtn(g.first.fr)}` : ''}</div></th></tr>
+          ${g.rows.map(row).join('')}
+        </tbody>`).join('') || `<tbody><tr><td colspan="${cols}" class="empty">No feature requests here.</td></tr></tbody>`}
+      </table>
     </div>`;
   $$('[data-frscope]').forEach((b) => b.addEventListener('click', () => { state.frScope = b.dataset.frscope; renderRequests(); }));
+  $$('[data-frgroup]').forEach((b) => b.addEventListener('click', () => { state.frGroup = b.dataset.frgroup; renderRequests(); }));
   $$('[data-frfilter]').forEach((b) => {
     const pick = () => { state.frStatus = b.dataset.frfilter; renderRequests(); };
     b.addEventListener('click', pick);

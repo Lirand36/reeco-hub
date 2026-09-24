@@ -552,12 +552,25 @@ h3.sub { font-size: 13px; font-weight: 600; margin: 16px 0 6px; }
 .fr-dots span { width: 14px; height: 5px; border-radius: 3px; background: var(--border-strong); }
 .fr-dots span.on { background: var(--info); }
 .fr-dots span.on.shipped { background: var(--brand); }
-.fr-item { padding: 14px 18px; border-bottom: 1px solid var(--border); }
-.fr-item:last-child { border-bottom: 0; }
-.fr-accounts { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-top: 10px; }
-.fr-acct { display: inline-flex; align-items: center; gap: 6px; }
-.fr-sim { margin-left: auto; color: var(--muted); font-size: 12px; }
-.fr-row { flex-wrap: wrap; }
+.fr-toolbar { flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+.fr-table tbody tr { cursor: default; }
+.fr-table tbody tr:hover { background: transparent; }
+.fr-table td { vertical-align: top; }
+.fr-table td[data-label="Customer"] { white-space: nowrap; }
+.fr-table .group-row th { background: var(--surface-2); color: var(--text); font-size: 14px; font-weight: 500; text-align: left; white-space: normal; padding: 9px 16px; border-top: 1px solid var(--border); position: static; }
+.fr-table tbody:first-of-type .group-row th { border-top: 0; }
+.fr-table tbody tr:last-child td { border-bottom: 0; }
+.fr-sim { display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 1px dashed var(--border-strong); border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; flex: none; }
+.fr-sim:hover { color: var(--text); border-color: var(--muted); }
+.fr-sim .ico { width: 14px; height: 14px; }
+@media (max-width: 760px) {
+  .fr-table thead { display: none; }
+  .fr-table tr:not(.group-row) { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .fr-table tr:not(.group-row) td { display: block; padding: 0; border: 0; }
+  .fr-table tr:not(.group-row) td:first-child { grid-column: 1 / -1; }
+  .fr-table td[data-label="Asked"]::before, .fr-table td[data-label="Status"]::before, .fr-table td[data-label="Also asked by"]::before { content: attr(data-label); display: block; font-size: 11px; color: var(--muted); }
+  .fr-table tbody tr:last-child { border-bottom: 0; }
+}
 .callout { display: flex; align-items: center; gap: 12px; padding: 12px 16px; margin-bottom: 12px; background: var(--brand-soft); border-color: color-mix(in srgb, var(--brand) 35%, transparent); }
 @media (max-width: 1080px) {
   .health-grid { grid-template-columns: minmax(0, 1fr); }
