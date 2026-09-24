@@ -38,7 +38,7 @@ function support(user) {
     const priority = m == null ? 'normal' : m < 0 ? 'urgent' : m <= 30 ? 'high' : 'normal';
     const flagged = c.flagged?.length && !c.escalatedTo;
     return {
-      id: `reply-${c.id}`, priority, icon: c.assignee ? '✉' : '📥', sort: m ?? 9999,
+      id: `reply-${c.id}`, priority, icon: c.assignee ? 'i-mail' : 'i-inbox', sort: m ?? 9999,
       title: c.assignee ? `Reply to ${last.author} at ${a.name}` : `Unassigned: ${last.author} at ${a.name}`,
       detail: c.ai && c.ai.forMessages === c.messages.length ? `✨ ${c.ai.summary}` : `“${last.text.length > 120 ? last.text.slice(0, 117) + '…' : last.text}”`,
       badge: a.segment === 'Enterprise' ? 'Enterprise' : null,
@@ -56,7 +56,7 @@ function support(user) {
 
   for (const { a, c } of escalated.filter(({ c }) => !awaitingReply(c))) {
     actions.push({
-      id: `esc-${c.id}`, priority: 'info', icon: '⏳', sort: 0,
+      id: `esc-${c.id}`, priority: 'info', icon: 'i-clock', sort: 0,
       title: `Waiting on engineering: ${c.escalatedTo}`,
       detail: `${a.name}: ${c.subject}. Give the customer an update when Jira moves.`,
       tags: [{ text: c.escalatedTo, tone: 'info' }],
@@ -114,7 +114,7 @@ function sales(user) {
   for (const p of db.approvals.filter((p) => p.status === 'pending' && p.requestedBy === user.name)) {
     const a = db.accounts.find((x) => x.id === p.accountId);
     actions.push({
-      id: `apr-${p.id}`, priority: 'info', icon: '⏳', sort: 0,
+      id: `apr-${p.id}`, priority: 'info', icon: 'i-clock', sort: 0,
       title: `Waiting on approval: ${a.name}, ${p.pct}% off`,
       detail: `Sent to #deal-desk ${daysSince(p.requestedAt) ? `${daysSince(p.requestedAt)}d` : 'today'}. You can't close the deal until it's decided.`,
       tags: [{ text: 'Deal desk', tone: 'warn' }],
@@ -132,7 +132,7 @@ function sales(user) {
   for (const a of open) {
     if (a.status === 'Live' && a.health != null && a.health < 50) {
       actions.push({
-        id: `risk-${a.id}`, priority: 'high', icon: '⚠', sort: 1,
+        id: `risk-${a.id}`, priority: 'high', icon: 'i-alert', sort: 1,
         title: `${a.name} renewal at risk`,
         detail: `Health ${a.health} with ${plural(a.tickets.filter((t) => t.status !== 'Done').length, 'open ticket')}. Sync with ${a.csm} before pushing the ${moneyK(a.deal.amount)} renewal.`,
         tags: [{ text: `Health ${a.health}`, tone: 'bad' }],
@@ -164,7 +164,7 @@ function manager(user) {
     const a = db.accounts.find((x) => x.id === p.accountId);
     const hours = Math.floor((Date.now() - new Date(p.requestedAt)) / 3600000);
     return {
-      id: `apr-${p.id}`, priority: hours >= 2 ? 'high' : 'normal', icon: '✓', sort: -hours,
+      id: `apr-${p.id}`, priority: hours >= 2 ? 'high' : 'normal', icon: 'i-check', sort: -hours,
       title: `Approve ${p.pct}% off for ${a.name}?`,
       detail: `${money(a.deal.amount)} → ${money(a.deal.amount * (1 - p.pct / 100))} ARR. ${p.requestedBy}: “${p.reason || 'no reason given'}”`,
       tags: [{ text: hours ? `Waiting ${hours}h` : 'Just in', tone: hours >= 2 ? 'warn' : '' }, { text: a.segment, tone: '' }],
@@ -181,7 +181,7 @@ function manager(user) {
   const atRisk = db.accounts.filter((a) => a.status === 'Live' && a.health != null && a.health < 50);
   for (const a of atRisk) {
     actions.push({
-      id: `risk-${a.id}`, priority: 'normal', icon: '⚠', sort: 5,
+      id: `risk-${a.id}`, priority: 'normal', icon: 'i-alert', sort: 5,
       title: `${a.name} renewal at risk (${moneyK(a.deal.amount)})`,
       detail: `Health ${a.health}. AE ${a.owner}, CSM ${a.csm}.`,
       tags: [{ text: `Health ${a.health}`, tone: 'bad' }],
@@ -214,7 +214,7 @@ function cs(user) {
   for (const an of db.anomalies.filter((x) => x.status === 'new' && mine.some((a) => a.id === x.accountId))) {
     const a = mine.find((x) => x.id === an.accountId);
     actions.push({
-      id: `an-${an.id}`, priority: an.severity === 'bad' ? 'urgent' : 'high', icon: '📉', sort: 0,
+      id: `an-${an.id}`, priority: an.severity === 'bad' ? 'urgent' : 'high', icon: 'i-trend-down', sort: 0,
       title: `Usage anomaly at ${a.name}`, badge: a.segment === 'Enterprise' ? 'Enterprise' : null,
       detail: `${anomalyText(an)}. Detected by Snowflake ${daysSince(an.detectedAt) ? `${daysSince(an.detectedAt)}d ago` : 'today'}.`,
       tags: [{ text: 'Snowflake', tone: 'info' }],
@@ -228,7 +228,7 @@ function cs(user) {
     const h = healthOf(a);
     if (h.level !== 'high' && !(h.level === 'medium' && h.renewalDays != null && h.renewalDays <= 90)) continue;
     actions.push({
-      id: `risk-${a.id}`, priority: h.level === 'high' ? 'urgent' : 'high', icon: '⚠', sort: h.score,
+      id: `risk-${a.id}`, priority: h.level === 'high' ? 'urgent' : 'high', icon: 'i-alert', sort: h.score,
       title: `${a.name}: ${h.level} risk (health ${h.score})`, badge: a.segment === 'Enterprise' ? 'Enterprise' : null,
       detail: h.reasons.filter((r) => !r.startsWith('Usage anomaly')).slice(0, 3).join(' · '), // anomalies have their own card
       tags: [h.renewalDays != null ? { text: `Renewal in ${h.renewalDays} days`, tone: h.renewalDays <= 90 ? 'warn' : '' } : null, { text: `${moneyK(a.deal.amount)} ARR`, tone: '' }].filter(Boolean),
@@ -243,7 +243,7 @@ function cs(user) {
       const important = c.escalatedTo || (c.slaDueAt && minsUntil(c.slaDueAt) < 0) || ['bug', 'integration'].includes(c.classification?.id);
       if (!important) continue;
       actions.push({
-        id: `sup-${c.id}`, priority: c.escalatedTo ? 'high' : 'normal', icon: '🎧', sort: 2,
+        id: `sup-${c.id}`, priority: c.escalatedTo ? 'high' : 'normal', icon: 'i-inbox', sort: 2,
         title: `Support: ${a.name}, “${c.subject}”`, badge: a.segment === 'Enterprise' ? 'Enterprise' : null,
         detail: `${classificationLabel(c.classification)} · owner ${c.assignee ?? 'unassigned'}${c.escalatedTo ? ` · with engineering (${c.escalatedTo})` : ''}.`,
         tags: [{ text: classificationLabel(c.classification), tone: 'info' }],
@@ -258,7 +258,7 @@ function cs(user) {
       const a = mine.find((x) => x.id === r.accountId);
       if (!a) continue;
       actions.push({
-        id: `fr-${f.id}-${a.id}`, priority: 'high', icon: '🚀', sort: 1,
+        id: `fr-${f.id}-${a.id}`, priority: 'high', icon: 'i-bulb', sort: 1,
         title: `Tell ${a.name}: “${f.title}” is live`,
         detail: `They asked for it ${daysSince(r.requestedAt) ? `${daysSince(r.requestedAt)} days ago` : 'recently'} (${f.jiraKey}). A quick note builds goodwill${a.renewalDate ? ' before renewal' : ''}.`,
         tags: [{ text: 'Shipped', tone: 'good' }],
@@ -275,7 +275,7 @@ function cs(user) {
     const done = ONBOARDING_STEPS.filter((s) => a.onboarding.steps[s.id].done).length;
     if (day <= 1 && done === 0) {
       actions.push({
-        id: `kick-${a.id}`, priority: 'high', icon: '🚀', sort: 0,
+        id: `kick-${a.id}`, priority: 'high', icon: 'i-rocket', sort: 0,
         title: `Kick off ${a.name}`,
         detail: `New customer: ${a.properties} properties. Introduce yourself in ${a.onboarding.slackChannel} and book the kickoff call.`,
         tags: [{ text: 'New customer', tone: 'brand' }],
@@ -284,7 +284,7 @@ function cs(user) {
     }
     if (next) {
       actions.push({
-        id: `step-${a.id}-${next.id}`, priority: day > 10 ? 'high' : 'normal', icon: '☐', sort: 3,
+        id: `step-${a.id}-${next.id}`, priority: day > 10 ? 'high' : 'normal', icon: 'i-check', sort: 3,
         title: `${a.name}: ${next.label}`,
         detail: `Onboarding day ${day} · ${done}/${ONBOARDING_STEPS.length} steps · ${a.usage?.propertiesLive ?? 0}/${a.properties} properties live.`,
         tags: day > 10 ? [{ text: `Day ${day}`, tone: 'warn' }] : [],
@@ -295,7 +295,7 @@ function cs(user) {
   }
 
   actions.push({
-    id: 'scan', priority: 'info', icon: '❄', sort: 9,
+    id: 'scan', priority: 'info', icon: 'i-search', sort: 9,
     title: 'Check Snowflake for usage anomalies',
     detail: 'Compares last week with the 4 weeks before for POs, AI invoices, active users and ERP sync errors. Also runs automatically every 30 minutes.',
     tags: [],

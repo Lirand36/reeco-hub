@@ -684,3 +684,17 @@ dialog:has(.wide-form) { width: min(560px, calc(100vw - 32px)); }
   .pl-table td.num-col { text-align: left; }
   .drop-closed { display: none; }
 }
+
+/* line icons for deal signals */
+.next-act { display: inline-flex; align-items: center; gap: 6px; }
+.next-act .ico { width: 15px; height: 15px; flex: none; }
+.sig-chip .ico { width: 13px; height: 13px; }
+.sig-chip { font-weight: 500; }
+.sig-head { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.sig-head .ico { width: 20px; height: 20px; }
+.sig-head.t-bad { color: var(--bad); }
+.sig-head.t-warn { color: var(--warn); }
+.sig-head.t-idea { color: var(--info); }
+.gm-ico .ico { width: 17px; height: 17px; color: var(--muted); }
+.gm-action.p-urgent .gm-ico .ico { color: var(--bad); }
+.gm-action.p-high .gm-ico .ico { color: var(--warn); }
