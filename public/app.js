@@ -393,63 +393,24 @@ function replyCell(a) {
   return `<span class="${tone}">${d ? `${d}d ago` : 'today'}</span>`;
 }
 const signalTone = (x) => (x.priority === 'high' || x.priority === 'urgent' ? 'bad' : x.type === 'similar' ? 'idea' : x.priority === 'normal' ? 'warn' : 'calm');
-const sigIcon = (x) => `<svg class="ico" aria-hidden="true"><use href="#${esc(x.icon)}"/></svg>`;
-// Status is text (never clickable); every action is a button: the main one, plus "More" for the rest.
-const otherSignals = (a) => a.signals.filter((x) => x !== a.next && x.type !== 'next' && !(a.next && x.type === a.next.type));
-const statusTags = (a) => `${a.next ? `<span class="status-main t-${signalTone(a.next)}" title="${esc(a.next.detail)}">${sigIcon(a.next)}${esc(a.next.title)}</span>` : ''}${otherSignals(a).map((x) => `<span class="sig-tag t-${signalTone(x)}" title="${esc(`${x.title}: ${x.detail}`)}">${sigIcon(x)}${esc(x.tag)}</span>`).join('')}`;
-const moreActions = (a) => otherSignals(a).filter((x) => x.cta);
-const dealActions = (a) => `${a.next?.cta ? ctaBtn(a, a.next, a.next.priority === 'high') : a.next?.done ? `<span class="muted xs">${esc(a.next.done)}</span>` : ''}${moreActions(a).length
-  ? `<button class="btn sm more-btn" data-more="${esc(a.id)}" aria-haspopup="menu" aria-expanded="false" title="More actions"><svg class="ico" aria-hidden="true"><use href="#i-more"/></svg><span class="sr-only">More actions</span></button>` : ''}`;
-
-// The "More" menu: the deal's other actions, each with the reason behind it.
-function openMoreMenu(btn, a) {
-  closeMoreMenu();
-  const menu = document.createElement('div');
-  menu.className = 'menu act-menu';
-  menu.id = 'act-menu';
-  menu.setAttribute('role', 'menu');
-  menu.innerHTML = `<div class="menu-label">More for ${esc(a.name)}</div>${moreActions(a).map((x) => `
-    <button class="menu-item act-item" role="menuitem" data-sig="${esc(x.type)}">
-      <svg class="ico t-${signalTone(x)}" aria-hidden="true"><use href="#${esc(x.icon)}"/></svg>
-      <span class="grow"><span class="act-label">${esc(x.cta.label)}</span><span class="muted xs act-why">${esc(x.why ?? x.title)}</span></span>
-    </button>`).join('')}`;
-  document.body.append(menu);
-  const r = btn.getBoundingClientRect();
-  const w = menu.offsetWidth, h = menu.offsetHeight;
-  menu.style.left = `${Math.max(8, Math.min(r.right - w, innerWidth - w - 8))}px`;
-  menu.style.top = `${r.bottom + 6 + h > innerHeight ? Math.max(8, r.top - h - 6) : r.bottom + 6}px`;
-  menu.style.bottom = 'auto';
-  btn.setAttribute('aria-expanded', 'true');
-  $$('.act-item', menu).forEach((it) => it.addEventListener('click', () => {
-    closeMoreMenu();
-    runDealCta(a, a.signals.find((x) => x.type === it.dataset.sig), btn);
-  }));
-  $('.act-item', menu)?.focus();
-  setTimeout(() => {
-    document.addEventListener('click', onMenuOutside, true);
-    document.addEventListener('keydown', onMenuKey, true);
-    const y0 = scrollY;
-    menuScroll = () => { if (Math.abs(scrollY - y0) > 40) closeMoreMenu(); };
-    addEventListener('scroll', menuScroll, { passive: true });
-  });
+// Suggested actions: every suggestion is the same card, "what to do" plus "why", and the whole card is the button.
+// The column shows the top one; "+N more" opens the rest as identical cards underneath.
+// The deal's own next step leads; a colleague's similar win is always an extra suggestion.
+const suggestions = (a) => { const all = a.signals.filter((x) => x.cta); return a.next?.cta ? [a.next, ...all.filter((x) => x !== a.next && x.type !== a.next.type)] : all; };
+const saCard = (a, x) => `<button class="sa t-${signalTone(x)}" data-cta="${esc(a.id)}" data-sig="${esc(x.type)}" title="${esc(x.detail)}">
+    <svg class="ico sa-ico" aria-hidden="true"><use href="#${esc(x.icon)}"/></svg>
+    <span class="sa-text"><span class="sa-do">${esc(x.action)}</span><span class="sa-why">${esc(x.why)}</span></span>
+    <svg class="ico sa-go" aria-hidden="true"><use href="#i-arrow"/></svg>
+  </button>`;
+function saCell(a) {
+  const list = suggestions(a);
+  if (!list.length) {
+    const w = a.signals.find((x) => x.type === 'waiting');
+    return w ? `<div class="sa-wait"><svg class="ico" aria-hidden="true"><use href="#i-clock"/></svg>${esc(w.action)}</div>` : '<span class="muted small">Nothing to do right now</span>';
+  }
+  const open = state.plOpen?.has(a.id);
+  return `${saCard(a, list[0])}${list.length > 1 ? `<button class="sa-more" data-expand="${esc(a.id)}" aria-expanded="${open}">${open ? 'Hide' : `+${list.length - 1} more`} ${list.length - 1 === 1 ? 'suggestion' : 'suggestions'}</button>` : ''}`;
 }
-let menuScroll = null;
-function closeMoreMenu() {
-  $('#act-menu')?.remove();
-  if (menuScroll) { removeEventListener('scroll', menuScroll); menuScroll = null; }
-  $$('[data-more][aria-expanded="true"]').forEach((b) => b.setAttribute('aria-expanded', 'false'));
-  document.removeEventListener('click', onMenuOutside, true);
-  document.removeEventListener('keydown', onMenuKey, true);
-}
-function onMenuOutside(e) { if (!e.target.closest('#act-menu')) closeMoreMenu(); }
-function onMenuKey(e) {
-  const items = $$('#act-menu .act-item');
-  const i = items.indexOf(document.activeElement);
-  if (e.key === 'Escape') { e.stopPropagation(); const b = $('[data-more][aria-expanded="true"]'); closeMoreMenu(); b?.focus(); }
-  else if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length]?.focus(); }
-  else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length]?.focus(); }
-}
-const ctaBtn = (a, x, primary) => (x?.cta ? `<button class="btn sm ${primary ? 'primary' : ''}" data-cta="${esc(a.id)}" data-sig="${esc(x.type)}" title="${esc(x.detail)}">${esc(x.cta.label)}</button>` : x?.done ? `<span class="muted xs">${esc(x.done)}</span>` : '');
 
 const PL_COLS = [
   { id: 'deal', label: 'Deal', key: (a) => a.name.toLowerCase() },
@@ -458,12 +419,12 @@ const PL_COLS = [
   { id: 'close', label: 'Close date', key: (a) => a.deal.closeDate ?? '9' },
   { id: 'owner', label: 'Owner', key: (a) => a.owner, team: true },
   { id: 'reply', label: 'Last reply', key: (a) => a.lastReplyAt ?? '' },
-  { id: 'next', label: 'Next best action', key: (a) => PRIORITY_RANK[a.next?.priority ?? 'low'] * 1e9 - a.deal.amount },
+  { id: 'next', label: 'Next suggested action', key: (a) => PRIORITY_RANK[a.next?.priority ?? 'low'] * 1e9 - a.deal.amount },
 ];
 
 async function renderPipeline(query = new URLSearchParams()) {
-  closeMoreMenu();
   const me = user();
+  state.plOpen ??= new Set();
   state.plScope ??= me.approver ? 'team' : 'mine';
   state.plSort ??= { id: 'next', dir: 1 };
   const viewMode = pipelineView();
@@ -509,8 +470,7 @@ async function renderPipeline(query = new URLSearchParams()) {
               <div class="spread" style="align-items:flex-start"><a class="name" href="#/accounts/${esc(a.id)}">${esc(a.name)}</a>${a.pendingApproval ? '<span class="chip warn" title="Discount waiting for approval">Approval</span>' : ''}</div>
               <div class="muted xs">${moneyCompact(a.deal.amount)} ARR · ${a.properties} ${a.properties === 1 ? 'property' : 'properties'}${team ? ` · ${esc(a.owner)}` : ''}</div>
               <div class="xs deal-meta"><span>${a.deal.closeDate ? `Closes ${closeCell(a)}` : ''}</span><span>Reply ${replyCell(a)}</span></div>
-              <div class="status-line">${statusTags(a)}</div>
-              <div class="acts">${dealActions(a)}</div>
+              <div class="deal-sa">${saCell(a)}${state.plOpen?.has(a.id) ? `<div class="sa-list">${suggestions(a).slice(1).map((x) => saCard(a, x)).join('')}</div>` : ''}</div>
             </article>`).join('') || '<div class="muted xs col-empty">No deals</div>'}
         </div>`;
       }).join('')}
@@ -534,8 +494,12 @@ async function renderPipeline(query = new URLSearchParams()) {
             <td data-label="Close date" class="small">${closeCell(a)}</td>
             ${team ? `<td data-label="Owner" class="small">${esc(a.owner)}</td>` : ''}
             <td data-label="Last reply" class="small">${replyCell(a)}</td>
-            <td data-label="Next best action" class="pl-next"><div class="next-row"><div class="status-line">${statusTags(a)}</div><div class="acts">${dealActions(a)}</div></div></td>
-          </tr>`).join('') || `<tr><td colspan="${cols.length}" class="empty">No open deals.</td></tr>`}</tbody>
+            <td data-label="Next suggested action" class="pl-next">${saCell(a)}</td>
+          </tr>${state.plOpen?.has(a.id) && suggestions(a).length > 1 ? `
+          <tr class="sa-row"><td colspan="${cols.length}">
+            <div class="sa-row-head">More suggestions for ${esc(a.name)}</div>
+            <div class="sa-grid">${suggestions(a).slice(1).map((x) => saCard(a, x)).join('')}</div>
+          </td></tr>` : ''}`).join('') || `<tr><td colspan="${cols.length}" class="empty">No open deals.</td></tr>`}</tbody>
       </table>
     </div>`}`;
 
@@ -552,10 +516,13 @@ async function renderPipeline(query = new URLSearchParams()) {
     const a = byId[b.dataset.cta];
     runDealCta(a, a.signals.find((x) => x.type === b.dataset.sig), b);
   }));
-  $$('[data-more]').forEach((b) => b.addEventListener('click', (e) => {
+  $$('[data-expand]').forEach((b) => b.addEventListener('click', (e) => {
     e.preventDefault(); e.stopPropagation();
-    if (b.getAttribute('aria-expanded') === 'true') closeMoreMenu(); else openMoreMenu(b, byId[b.dataset.more]);
+    const id = b.dataset.expand;
+    if (state.plOpen.has(id)) state.plOpen.delete(id); else state.plOpen.add(id);
+    renderPipeline();
   }));
+
 
   $$('[data-move]').forEach((sel) => sel.addEventListener('change', () => {
     const a = byId[sel.dataset.move];

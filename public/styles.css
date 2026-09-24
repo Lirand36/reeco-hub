@@ -639,7 +639,7 @@ dialog.drawer[open] { animation: slide-in .18s ease-out; }
 .link-strong { font-weight: 600; }
 .link-strong:hover { color: var(--brand-ink); }
 .pl-table td { vertical-align: middle; }
-.pl-table .pl-next { min-width: 300px; }
+.pl-table .pl-next { width: 290px; min-width: 250px; }
 .pl-table select.input.sm { max-width: 170px; }
 .seg-inline button .ico { width: 14px; height: 14px; }
 /* other signals on a deal */
@@ -658,38 +658,47 @@ dialog:has(.wide-form) { width: min(560px, calc(100vw - 32px)); }
   .pl-table thead { display: none; }
   .pl-table tbody tr { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
   .pl-table tbody td { display: block; padding: 0; border: 0; min-width: 0; max-width: none; }
-  .pl-table td[data-label="Deal"], .pl-table td[data-label="Next best action"] { grid-column: 1 / -1; }
-  .pl-table td[data-label]:not([data-label="Deal"]):not([data-label="Next best action"])::before { content: attr(data-label); display: block; font-size: 11px; color: var(--muted); }
+  .pl-table td[data-label="Deal"], .pl-table td[data-label="Next suggested action"] { grid-column: 1 / -1; }
+  .pl-table td[data-label]:not([data-label="Deal"]):not([data-label="Next suggested action"])::before { content: attr(data-label); display: block; font-size: 11px; color: var(--muted); }
   .pl-table td.num-col { text-align: left; }
   .drop-closed { display: none; }
 }
 
-/* line icons for deal signals */
+/* Good morning icons */
 .gm-ico .ico { width: 17px; height: 17px; color: var(--muted); }
 .gm-action.p-urgent .gm-ico .ico { color: var(--bad); }
 .gm-action.p-high .gm-ico .ico { color: var(--warn); }
 
-/* deal status (text) and actions (buttons) */
-.status-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; }
-.status-main { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; font-size: 13.5px; white-space: nowrap; }
-.status-main .ico { width: 15px; height: 15px; }
-.sig-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); white-space: nowrap; cursor: default; }
-.sig-tag .ico { width: 13px; height: 13px; }
-.status-main.t-bad, .sig-tag.t-bad { color: var(--bad); }
-.status-main.t-warn, .sig-tag.t-warn { color: var(--warn); }
-.status-main.t-idea, .sig-tag.t-idea { color: var(--info); }
-.acts { display: flex; align-items: center; gap: 6px; flex: none; }
-.more-btn { position: relative; padding-left: 8px; padding-right: 8px; }
-.more-btn .ico { width: 16px; height: 16px; }
-.more-btn[aria-expanded="true"] { background: var(--surface-2); }
-.next-row { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; }
-.deal .status-line { margin-top: 4px; gap: 3px 8px; }
-.deal .acts { margin-top: 6px; }
-.act-menu { width: 300px; }
-.act-item { align-items: flex-start; }
-.act-item .ico { margin-top: 2px; width: 16px; height: 16px; }
-.act-item .ico.t-bad { color: var(--bad); }
-.act-item .ico.t-warn { color: var(--warn); }
-.act-item .ico.t-idea { color: var(--info); }
-.act-label { display: block; font-weight: 500; }
-.act-why { display: block; }
+/* suggested actions: one card per suggestion, "what to do" + "why"; the whole card is the button */
+.sa { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-left: 3px solid var(--edge, var(--border-strong)); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.sa:hover { background: var(--surface-2); border-color: var(--border-strong); border-left-color: var(--edge, var(--border-strong)); }
+.sa:hover .sa-go { color: var(--text); transform: translateX(2px); }
+.sa:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.sa.t-bad { --edge: var(--bad); }
+.sa.t-warn { --edge: var(--warn); }
+.sa.t-idea { --edge: var(--info); }
+.sa.t-calm { --edge: var(--brand); }
+.sa-ico { width: 16px; height: 16px; flex: none; color: var(--edge, var(--muted)); }
+.sa-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.sa-do { font-size: 13.5px; font-weight: 600; line-height: 1.3; }
+.sa-why { font-size: 12px; color: var(--muted); line-height: 1.3; margin-top: 1px; }
+.sa-go { width: 14px; height: 14px; flex: none; color: var(--muted); transition: transform .12s; }
+.sa-more { display: inline-block; margin-top: 4px; padding: 2px 0; border: 0; background: none; font: inherit; font-size: 12px; font-weight: 500; color: var(--brand-ink); cursor: pointer; }
+.sa-more:hover { text-decoration: underline; }
+.sa-wait { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
+.sa-wait .ico { width: 14px; height: 14px; }
+.pl-table tr.sa-row td { background: var(--surface-2); padding: 10px 16px 14px; }
+.sa-row-head { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.sa-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 8px; }
+.deal-sa { margin-top: 6px; }
+.deal-sa .sa { padding: 7px 8px; gap: 8px; }
+.deal-sa .sa-do { font-size: 12.5px; }
+.deal-sa .sa-why { font-size: 11.5px; }
+.sa-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+@media (max-width: 760px) {
+  .pl-table tr.sa-row { display: block; padding: 0 16px 12px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+  .pl-table tr.sa-row td { display: block; padding: 10px 0 0; }
+  .pl-table .pl-next { width: auto; }
+}
+.deal-sa .sa-ico, .deal-sa .sa-go { display: none; }
+.deal-sa .sa { padding: 7px 10px; }
