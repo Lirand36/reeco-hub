@@ -41,7 +41,7 @@ The same steps, with links, are in the app under the user menu (bottom-left) →
    - **Stage gates:** moving a deal forward asks for what the stage needs, prefilled from HubSpot and saved back to it. Qualified: pain, properties, ERP, decision maker. Demo: date, Solutions Engineer, what to show, attendees; the SE gets the details in a Slack DM. Champion: champion and business value. Contract: signer, close date, legal contact. Closed lost: reason (and competitor).
    - Try it: drag *Northgate Inns* to **Demo**, or use **Follow up** on *Lakeview Lodges*.
    - **Close a deal:** mark *Harborline Hotel Group* **Closed won**. One click updates HubSpot, announces in `#deals`, creates `#onb-harborline` with the checklist, opens a Jira onboarding epic and logs to Snowflake.
-2. **Deal desk.** *Northgate Inns* → **Request discount** 20% (the approval threshold is 15%). The request goes to `#deal-desk` with Approve/Reject buttons. Approve it from **Approvals**, either as *Eitan B. (Sales Manager)* or with **Simulate Slack click**.
+2. **Deal desk.** *Northgate Inns* → **Request discount** 20% (the approval threshold is 15%). The request goes to `#deal-desk` with Approve/Reject buttons. **Approvals** is a table (pending / decided / all) with the discount, the ARR after it, the reason and the decision; approve as *Eitan B. (Sales Manager)*, or as an AE use **Approve as Eitan in Slack** to simulate the Slack click.
 3. **Support.** Sign in as *Ron A. (Support)* and open **Inbox**.
    - **Queue:** a table of conversations (customer, subject, classification, reply due, owner, last message), most urgent first and sortable by any column, in tabs: Mine / Unassigned / Enterprise / Overdue / All open / Snoozed / Closed. Click a row, or use `J` / `K` and `Enter`, to open it.
    - **Conversation:** one conversation at a time, with **Previous / Next** through the queue. **Assign to me**, change owner, or **Snooze** (1h, 4h, tomorrow). A snoozed conversation wakes up when the customer replies. Closing or snoozing moves on to the next one. Every change syncs to Intercom.
@@ -65,6 +65,7 @@ The same steps, with links, are in the app under the user menu (bottom-left) →
 - **Keyboard:** `G` then `H` / `P` / `I` / `O` / `A` / `L` to switch pages, `J` / `K` to move through the inbox (`Enter` opens), `?` for all shortcuts.
 - **User menu** (bottom-left): switch demo user, light / dark / system theme, demo guide, reset demo data.
 - Irreversible actions (mark a deal lost, reset data) ask for confirmation; hovering a notification keeps it open.
+- The account page shows the deal's next suggested actions (same cards as the Pipeline); finished onboarding folds into one line.
 
 ## Rules (in `src/store.js → CONFIG`)
 

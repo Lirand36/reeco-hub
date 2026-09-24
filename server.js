@@ -186,7 +186,7 @@ const routes = [
     const results = [];
     for (const id of ids) results.push(await svc.syncUsage(id, actorOf(req).name));
     const ticked = results.flatMap((r) => r.ticked.map((t) => `${r.account.name}: ${t}`));
-    announce(ticked.length ? `Usage synced. Completed automatically: ${ticked.join('; ')}.` : 'Usage synced. No new onboarding milestones yet.', { icon: ticked.length ? '✓' : '↻', tone: ticked.length ? 'good' : 'info' });
+    announce(ticked.length ? `Usage synced. Completed automatically: ${ticked.join('; ')}.` : 'Usage synced. No new onboarding milestones yet.', { icon: ticked.length ? 'i-done' : 'i-reset', tone: ticked.length ? 'good' : 'info' });
     return { ticked };
   }],
   ['POST', /^\/api\/accounts\/([\w-]+)\/steps\/(\w+)$/, (req, [id, step]) => svc.toggleStep(id, step, actorOf(req).name)],
@@ -207,7 +207,7 @@ const routes = [
     clearLog();
     clearActivities();
     bus.emit('changed', { reset: true });
-    announce('Demo data reset. Everything is back to the starting point.', { icon: '↺', tone: 'info' });
+    announce('Demo data reset. Everything is back to the starting point.', { icon: 'i-reset', tone: 'info' });
     return { ok: true };
   }],
 ];

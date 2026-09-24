@@ -9,8 +9,8 @@ const SYSTEMS = {
   intercom: { name: 'Intercom', color: 'var(--intercom)', letter: 'I' },
   jira: { name: 'Jira', color: 'var(--jira)', letter: 'J' },
   slack: { name: 'Slack', color: 'var(--slack)', letter: 'S' },
-  snowflake: { name: 'Snowflake', color: 'var(--snowflake)', letter: '❄' },
-  claude: { name: 'Claude', color: 'var(--claude)', letter: '✦' },
+  snowflake: { name: 'Snowflake', color: 'var(--snowflake)', letter: 'SF' },
+  claude: { name: 'Claude', color: 'var(--claude)', letter: 'C' },
 };
 
 const state = { meta: null, log: [], logFilter: null, flashId: null };
@@ -52,6 +52,8 @@ function urgency(c) {
   if (mins < 0) return { tone: 'bad', text: `Reply overdue ${fmtMins(-mins)}` };
   return { tone: mins <= 30 ? 'warn' : 'calm', text: `Reply due in ${fmtMins(mins)}` };
 }
+// Line icon from the sprite in index.html (names start with i-); anything else is shown as text.
+const icon = (name, cls = '') => (String(name ?? '').startsWith('i-') ? `<svg class="ico ${cls}" aria-hidden="true"><use href="#${esc(name)}"/></svg>` : esc(name ?? ''));
 const segBadge = (seg) => (seg === 'Enterprise' ? '<span class="seg-badge" title="Enterprise customer">Enterprise</span>' : '');
 
 function confirmEscalate() {
@@ -124,7 +126,7 @@ function connectEvents() {
   es.addEventListener('activity', (e) => {
     const x = JSON.parse(e.data);
     const byOther = x.actor && x.actor !== user().name;
-    toast(`<div class="t-body"><span class="t-ico" aria-hidden="true">${esc(x.icon)}</span>
+    toast(`<div class="t-body"><span class="t-ico" aria-hidden="true">${icon(x.icon)}</span>
       <div><div>${esc(x.text)}</div>${byOther ? `<div class="muted xs">by ${esc(x.actor)}</div>` : ''}</div></div>
       <a class="link xs t-more" href="#/log?open=${esc(x.id)}">Details</a>`, { tone: x.tone || 'good', ms: 6000 });
   });
@@ -199,7 +201,7 @@ async function renderHome() {
     <section class="gm-hero">
       <div class="grow">
         <div class="muted small">${today}</div>
-        <h1>Good morning, ${esc(first)} <span aria-hidden="true">☀</span></h1>
+        <h1>Good morning, ${esc(first)}</h1>
         <p class="gm-summary">${esc(d.summary)}</p>
       </div>
       <span class="chip gm-role">${esc(d.user.role)}</span>
@@ -216,14 +218,14 @@ async function renderHome() {
     <div class="card">
       ${d.actions.map((a) => `
         <div class="gm-action p-${a.priority}">
-          <span class="gm-ico" aria-hidden="true">${a.icon?.startsWith('i-') ? `<svg class="ico"><use href="#${esc(a.icon)}"/></svg>` : esc(a.icon)}</span>
+          <span class="gm-ico" aria-hidden="true">${icon(a.icon)}</span>
           <div class="grow">
             <div class="gm-title">${esc(a.title)} ${a.badge ? segBadge(a.badge) : ''}</div>
             <div class="muted small">${esc(a.detail)}</div>
             ${a.tags.length ? `<div class="row" style="margin-top:6px;gap:4px">${a.tags.map((t) => `<span class="chip ${esc(t.tone)}">${esc(t.text)}</span>`).join('')}</div>` : ''}
           </div>
           <div class="gm-ctas">${ctaButton(a.secondary)}${ctaButton(a.cta, true)}</div>
-        </div>`).join('') || '<div class="empty">☕ Nothing needs you right now.</div>'}
+        </div>`).join('') || '<div class="empty">Nothing needs you right now.</div>'}
     </div>`;
 
   $$('[data-endpoint]').forEach((b) => b.addEventListener('click', async () => {
@@ -653,7 +655,7 @@ function pickCloseReason(suggested, onPick) {
     <div class="reasons" role="radiogroup" aria-label="Close reason">
       ${state.meta.closeReasons.map((r) => `
         <label class="reason"><input type="radio" name="reason" value="${r.id}" ${r.id === suggested ? 'checked' : ''} required />
-          <span>${esc(r.label)}</span>${r.id === suggested ? '<span class="chip ai">✨ suggested</span>' : ''}</label>`).join('')}
+          <span>${esc(r.label)}</span>${r.id === suggested ? `<span class="chip ai">${icon('i-sparkle')}Suggested</span>` : ''}</label>`).join('')}
     </div>
     <p class="muted small">Tagged in Intercom and logged to Snowflake, so we can see what drives support volume.</p>`,
     'Close conversation', async (data) => onPick(data.reason));
@@ -712,7 +714,7 @@ function healthPanel(a) {
     <section class="card" style="margin-top:16px">
       <div class="card-head">
         <div><h2>Weekly usage · last 12 weeks</h2><div class="muted small">From Snowflake. An anomaly is last week vs the 4 weeks before: a drop of 30%+ or an error spike.</div></div>
-        <button class="btn sm" data-scan>❄ Check for anomalies</button>
+        <button class="btn sm" data-scan>${icon('i-search')}Check for anomalies</button>
       </div>
       <div class="metric-grid">
         ${METRIC_TILES.map(([m, label]) => {
@@ -812,6 +814,9 @@ function bindCsActions(root) {
 
 async function renderAccount(id, query = new URLSearchParams()) {
   const a = await api(`/api/accounts/${id}`);
+  // Open deals get the same suggested actions as the Pipeline
+  const dealOpen = !['closedwon', 'closedlost'].includes(a.deal.stage);
+  const pl = dealOpen ? (await api('/api/pipeline')).find((x) => x.id === id) : null;
   const stages = state.meta.stages;
   const idx = stages.findIndex((s) => s.id === a.deal.stage);
   const pending = a.approvals.find((p) => p.status === 'pending');
@@ -837,8 +842,8 @@ async function renderAccount(id, query = new URLSearchParams()) {
         </div>
       </div>
       <div class="row">
-        <button class="btn" id="add-note">＋ Note</button>
-        <button class="btn" id="new-ticket">＋ Jira ticket</button>
+        <button class="btn" id="add-note">${icon('i-plus')}Note</button>
+        <button class="btn" id="new-ticket">${icon('i-plus')}Jira ticket</button>
       </div>
     </div>
 
@@ -857,7 +862,7 @@ async function renderAccount(id, query = new URLSearchParams()) {
             <div><h2>${esc(a.deal.name)}</h2><div class="muted small">Click a stage to update HubSpot</div></div>
             ${src('hubspot', `Deal ${a.deal.id}`)}
           </div>
-          ${pending ? `<div class="banner">⏳ ${pending.pct}% discount waiting for manager approval in Slack <span class="mono">#deal-desk</span>. <a class="link" href="#/approvals">View</a></div>` : ''}
+          ${pending ? `<div class="banner">${icon('i-clock')}${pending.pct}% discount waiting for manager approval in Slack <span class="mono">#deal-desk</span>. <a class="link" href="#/approvals">View</a></div>` : ''}
           <div class="pipeline">
             ${stages.map((s, i) => `<button class="stage ${s.id === 'closedlost' ? 'lost' : ''} ${i === idx ? 'current' : i < idx && a.deal.stage !== 'closedlost' ? 'done' : ''}" data-stage="${s.id}">${esc(s.label)}</button>`).join('')}
           </div>
@@ -869,15 +874,16 @@ async function renderAccount(id, query = new URLSearchParams()) {
             </div>
             ${a.deal.stage !== 'closedwon' && !pending ? '<button class="btn sm" id="discount">Request discount</button>' : ''}
           </div>
+          ${pl && suggestions(pl).length ? `<div class="acct-sa"><div class="sa-row-head">Next suggested action${suggestions(pl).length > 1 ? 's' : ''}</div><div class="sa-grid">${suggestions(pl).map((x) => saCard(pl, x)).join('')}</div></div>` : ''}
         </section>
 
         ${a.onboarding ? `
-        <section class="card">
-          <div class="card-head">
+        <${a.onboarding.completedAt ? 'details' : 'section'} class="card onb-card">
+          <${a.onboarding.completedAt ? 'summary' : 'div'} class="card-head">
             <div><h2>Onboarding · ${doneCount}/${steps.length}</h2>
               <div class="muted small">${a.onboarding.completedAt ? `Completed ${rel(a.onboarding.completedAt)}` : `Day ${days(a.onboarding.startedAt)}`} · Slack <span class="mono">${esc(a.onboarding.slackChannel)}</span> · Jira <span class="mono">${esc(a.onboarding.jiraEpic ?? '')}</span></div></div>
-            <button class="btn sm" id="sync">❄ Sync from Snowflake</button>
-          </div>
+            ${a.onboarding.completedAt ? `<span class="link small onb-toggle">Show steps</span>` : `<button class="btn sm" id="sync">${icon('i-reset')}Sync from Snowflake</button>`}
+          </${a.onboarding.completedAt ? 'summary' : 'div'}>
           <div class="steps">
             ${steps.map((s) => {
               const st = a.onboarding.steps[s.id];
@@ -888,7 +894,7 @@ async function renderAccount(id, query = new URLSearchParams()) {
               </div>`;
             }).join('')}
           </div>
-        </section>` : ''}
+        </${a.onboarding.completedAt ? 'details' : 'section'}>` : ''}
 
       </div>
 
@@ -915,7 +921,7 @@ async function renderAccount(id, query = new URLSearchParams()) {
               <div><div class="muted xs">Vendors connected</div><div class="v num">${compact(a.usage.vendorsConnected)}</div></div>
             </div>
             <div class="spread" style="margin-top:14px"><span class="muted xs">Last active ${rel(a.usage.lastActive)}</span>
-              ${a.onboarding ? '' : '<button class="btn sm" id="sync">❄ Refresh</button>'}</div>`
+              ${a.onboarding ? '' : `<button class="btn sm" id="sync">${icon('i-reset')}Refresh</button>`}</div>`
           : '<p class="muted small">Prospect: no product usage yet.</p>'}
         </section>
 
@@ -932,6 +938,7 @@ async function renderAccount(id, query = new URLSearchParams()) {
     $$('[data-acct-tab]').forEach((x) => { const on = x === b; x.classList.toggle('sel', on); x.setAttribute('aria-selected', on); });
     $$('.tab-panel').forEach((p) => (p.hidden = p.id !== `panel-${b.dataset.acctTab}`));
   }));
+  $$('.acct-sa [data-cta]').forEach((b) => b.addEventListener('click', () => runDealCta(pl, pl.signals.find((x) => x.type === b.dataset.sig), b)));
   bindCsActions(view);
 
   $$('.stage').forEach((b) => b.addEventListener('click', () => {
@@ -1007,18 +1014,18 @@ const SENTIMENT_TONE = { calm: 'good', confused: 'info', frustrated: 'warn', ang
 function aiCard(c) {
   if (c.state !== 'open') return '';
   if (!c.ai) {
-    return `<div class="ai-card empty-ai"><span>✨ Get a summary, the customer's mood and a draft reply.</span>
-      <button class="btn sm ai-btn" id="ai-run">✨ Summarize &amp; draft reply</button></div>`;
+    return `<div class="ai-card empty-ai"><span>${icon('i-sparkle')}Get a summary, the customer's mood and a draft reply.</span>
+      <button class="btn sm ai-btn" id="ai-run">${icon('i-sparkle')}Summarize &amp; draft reply</button></div>`;
   }
   const stale = c.ai.forMessages !== c.messages.length;
   return `
     <div class="ai-card">
       <div class="spread">
-        <div class="row"><strong>✨ AI assist</strong>
+        <div class="row"><strong class="ai-title">${icon('i-sparkle')}AI assist</strong>
           <span class="chip ${SENTIMENT_TONE[c.ai.sentiment] ?? ''}">${esc(c.ai.sentiment)}</span>
           <span class="chip">Likely: ${esc(reasonLabel(c.ai.category))}</span>
           ${stale ? '<span class="chip warn">New messages since</span>' : ''}</div>
-        <button class="btn sm ghost" id="ai-run" title="Regenerate">↻ ${stale ? 'Refresh' : 'Regenerate'}</button>
+        <button class="btn sm ghost" id="ai-run" title="Regenerate">${icon('i-reset')}${stale ? 'Refresh' : 'Regenerate'}</button>
       </div>
       <p class="ai-summary">${esc(c.ai.summary)}</p>
       <p class="small"><b>Next step:</b> ${esc(c.ai.next_step)}</p>
@@ -1114,7 +1121,7 @@ async function renderInboxQueue() {
   view.innerHTML = `
     <div class="page-head">
       <div><h1>Inbox</h1><p class="muted">Intercom conversations, most urgent first. Open one to reply with the customer's account at hand.</p></div>
-      <button class="btn" id="simulate" title="Demo: pretend a customer just wrote in through Intercom">⚡ Simulate a message</button>
+      <button class="btn" id="simulate" title="Demo: pretend a customer just wrote in through Intercom">${icon('i-play')}Simulate a message</button>
     </div>
     <div class="tabs" role="tablist" aria-label="Queues">
       ${INBOX_TABS.map((t) => { const n = items.filter((c) => t.test(c, me.name)).length; return `<button role="tab" class="tab ${t.id === tab.id ? 'sel' : ''}" data-tab="${t.id}" aria-selected="${t.id === tab.id}">${esc(t.label)} <span class="num">${n}</span></button>`; }).join('')}
@@ -1131,7 +1138,7 @@ async function renderInboxQueue() {
         <tbody>${list.map((i, n) => `
           <tr data-href="#/inbox/${esc(i.id)}" class="u-${urgency(i)?.tone ?? 'none'} ${n === state.inboxCursor ? 'cursor' : ''} ${i.id === state.flashId ? 'flash' : ''}">
             <td data-label="Customer"><a class="row-link" href="#/inbox/${esc(i.id)}">${esc(i.account.name)}</a> ${segBadge(i.account.segment)}</td>
-            <td data-label="Subject" class="subj"><div class="ellipsis" style="font-weight:500">${esc(i.subject)}</div><div class="muted xs ellipsis">${i.ai && i.ai.forMessages === i.messages.length ? `✨ ${esc(i.ai.summary)}` : esc(i.messages.at(-1)?.text)}</div></td>
+            <td data-label="Subject" class="subj"><div class="ellipsis" style="font-weight:500">${esc(i.subject)}</div><div class="muted xs ellipsis">${i.ai && i.ai.forMessages === i.messages.length ? `${icon('i-sparkle', 'inline')}${esc(i.ai.summary)}` : esc(i.messages.at(-1)?.text)}</div></td>
             <td data-label="Classification" class="small">${esc(i.classificationLabel)}${i.escalatedTo ? `<div class="mono info-text xs">${esc(i.escalatedTo)}</div>` : ''}</td>
             <td data-label="Reply due">${dueCell(i)}</td>
             <td data-label="Owner" class="small ${i.assignee ? '' : 'tone-warn'}">${i.assignee ? esc(i.assignee) : 'Unassigned'}</td>
@@ -1304,7 +1311,7 @@ async function renderPortfolio() {
           <button class="${state.pfScope === 'mine' ? 'sel' : ''}" data-scope="mine" aria-pressed="${state.pfScope === 'mine'}">My accounts</button>
           <button class="${state.pfScope === 'all' ? 'sel' : ''}" data-scope="all" aria-pressed="${state.pfScope === 'all'}">All accounts</button>
         </div>
-        <button class="btn" data-scan>❄ Check for anomalies</button>
+        <button class="btn" data-scan>${icon('i-search')}Check for anomalies</button>
       </div>
     </div>
     <div class="kpis">
@@ -1448,7 +1455,7 @@ async function renderOnboarding() {
   view.innerHTML = `
     <div class="page-head">
       <div><h1>Onboarding</h1><p class="muted">Go-live tracking per hotel group. Usage-based steps tick themselves off from Snowflake. Each customer gets a Slack channel and a Jira epic.</p></div>
-      ${active.length ? '<button class="btn" id="sync-all">❄ Sync all from Snowflake</button>' : ''}
+      ${active.length ? `<button class="btn" id="sync-all">${icon('i-reset')}Sync all from Snowflake</button>` : ''}
     </div>
     <h2 style="margin-bottom:10px">In progress · ${active.length}</h2>
     <div class="onb-grid" style="margin-bottom:26px">${active.map(card).join('') || '<div class="card empty">Nobody onboarding right now. Close a deal from the Pipeline to start one.</div>'}</div>
@@ -1464,41 +1471,61 @@ async function renderOnboarding() {
 async function renderApprovals() {
   const list = await api('/api/approvals');
   const me = user();
-  const pending = list.filter((p) => p.status === 'pending');
-  const decided = list.filter((p) => p.status !== 'pending');
-  const row = (p) => `
-    <div class="approval">
-      <div>
-        <div class="row"><a class="link" href="#/accounts/${p.accountId}" style="font-size:15px">${esc(p.account.name)}</a>
-          <span class="chip ${p.status === 'pending' ? 'warn' : p.status === 'approved' ? 'good' : 'bad'}">${p.pct}% · ${esc(p.status)}</span></div>
-        <div class="muted small num" style="margin-top:4px">${money(p.account.deal.amount)} → ${money(p.account.deal.amount * (1 - p.pct / 100))} ARR · requested by ${esc(p.requestedBy)} ${rel(p.requestedAt)}
-          ${p.decidedBy ? ` · ${esc(p.status)} by ${esc(p.decidedBy)} ${p.via === 'slack' ? 'in Slack' : 'in the hub'}` : ''}</div>
-        ${p.reason ? `<div class="quote">${esc(p.reason)}</div>` : ''}
-      </div>
-      ${p.status === 'pending' ? `
-        <div class="row">
-          <button class="btn primary sm" data-decide="approved" data-id="${p.id}" ${me.approver ? '' : 'disabled title="Only a Sales Manager can approve"'}>Approve</button>
-          <button class="btn sm danger" data-decide="rejected" data-id="${p.id}" ${me.approver ? '' : 'disabled title="Only a Sales Manager can approve"'}>Reject</button>
-          <button class="btn sm ghost" data-slack="${p.id}" title="Sends the same payload Slack would send when the manager clicks Approve">Simulate Slack click</button>
-        </div>` : ''}
-    </div>`;
+  state.aprFilter ??= 'pending';
+  const filters = [
+    ['pending', 'Pending', (p) => p.status === 'pending'],
+    ['decided', 'Decided', (p) => p.status !== 'pending'],
+    ['all', 'All', () => true],
+  ];
+  const test = filters.find((f) => f[0] === state.aprFilter)[2];
+  const rows = list.filter(test).sort((x, y) => (x.status === 'pending') === (y.status === 'pending') ? y.requestedAt.localeCompare(x.requestedAt) : x.status === 'pending' ? -1 : 1);
+  const approver = state.meta.users.find((u) => u.approver);
+  const net = (p) => p.account.deal.amount * (1 - p.pct / 100);
+  const decision = (p) => {
+    if (p.status !== 'pending') {
+      return `<span class="chip ${p.status === 'approved' ? 'good' : 'bad'}">${icon(p.status === 'approved' ? 'i-done' : 'i-x')}${p.status === 'approved' ? 'Approved' : 'Rejected'}</span>
+        <div class="muted xs" style="margin-top:4px">by ${esc(p.decidedBy)} ${p.via === 'slack' ? 'in Slack' : 'in the hub'} · ${rel(p.decidedAt)}</div>`;
+    }
+    if (me.approver) {
+      return `<div class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn primary sm" data-decide="approved" data-id="${p.id}">Approve</button><button class="btn sm danger" data-decide="rejected" data-id="${p.id}">Reject</button></div>`;
+    }
+    return `<div class="small">Waiting on ${esc(approver.name)}</div>
+      <button class="btn sm ghost apr-sim" data-slack="${p.id}" title="Demo: sends the same payload Slack sends when ${esc(approver.name)} clicks Approve">${icon('i-play')}Approve as ${esc(approver.name.split(' ')[0])} in Slack</button>`;
+  };
+
   view.innerHTML = `
     <div class="page-head">
-      <div><h1>Approvals</h1><p class="muted">Discounts above ${state.meta.config.discountApprovalThreshold}% go to <span class="mono">#deal-desk</span> in Slack. The manager approves there or here, and HubSpot updates either way.</p></div>
+      <div><h1>Approvals</h1><p class="muted">Discounts above ${state.meta.config.discountApprovalThreshold}% go to <span class="mono">#deal-desk</span> in Slack. ${esc(approver.name)} approves there or here, and HubSpot updates either way.</p></div>
     </div>
-    ${!me.approver && pending.length ? `<div class="card card-pad small" style="margin-bottom:14px">You're signed in as <b>${esc(me.name)}</b> (${esc(me.role)}). Switch to <b>Eitan B. (Sales Manager)</b> at the bottom-left to approve, or use <b>Simulate Slack click</b>.</div>` : ''}
-    <h2 style="margin-bottom:10px">Pending · ${pending.length}</h2>
-    <div class="card" style="margin-bottom:24px">${pending.map(row).join('') || '<div class="empty">Nothing waiting.</div>'}</div>
-    <h2 style="margin-bottom:10px">Decided · ${decided.length}</h2>
-    <div class="card">${decided.map(row).join('') || '<div class="empty">No decisions yet.</div>'}</div>`;
+    <div class="filters" style="margin-bottom:12px">${filters.map(([id, label, t]) => `<span class="chip ${state.aprFilter === id ? 'sel' : ''}" role="button" tabindex="0" aria-pressed="${state.aprFilter === id}" data-aprf="${id}">${label} · ${list.filter(t).length}</span>`).join('')}</div>
+    <div class="card table-wrap">
+      <table class="table apr-table">
+        <thead><tr><th>Deal</th><th class="num-col">Discount</th><th class="num-col">ARR after discount</th><th>Reason</th><th>Requested</th><th>Decision</th></tr></thead>
+        <tbody>${rows.map((p) => `
+          <tr data-href="#/accounts/${esc(p.accountId)}">
+            <td data-label="Deal"><a class="row-link" href="#/accounts/${esc(p.accountId)}">${esc(p.account.name)}</a> ${segBadge(p.account.segment)}<div class="muted xs">${esc(stageName(p.account.deal.stage))}</div></td>
+            <td data-label="Discount" class="num num-col"><b>${p.pct}%</b></td>
+            <td data-label="ARR after discount" class="num num-col">${money(net(p))}<div class="muted xs">from ${money(p.account.deal.amount)}</div></td>
+            <td data-label="Reason" class="small" title="${esc(p.reason || '')}"><div class="apr-reason">${p.reason ? esc(p.reason) : '<span class="muted">No reason given</span>'}</div></td>
+            <td data-label="Requested" class="small">${esc(p.requestedBy)}<div class="muted xs">${rel(p.requestedAt)}</div></td>
+            <td data-label="Decision" class="apr-decision">${decision(p)}</td>
+          </tr>`).join('') || `<tr><td colspan="6" class="empty">${state.aprFilter === 'pending' ? 'Nothing waiting for approval.' : 'No approvals here yet.'}</td></tr>`}</tbody>
+      </table>
+    </div>`;
 
+  $$('.apr-table tbody tr[data-href]').forEach((tr) => tr.addEventListener('click', (e) => { if (!e.target.closest('a, button')) location.hash = tr.dataset.href; }));
+  $$('[data-aprf]').forEach((c) => {
+    const pick = () => { state.aprFilter = c.dataset.aprf; renderApprovals(); };
+    c.addEventListener('click', pick);
+    c.addEventListener('keydown', (e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), pick()));
+  });
   $$('[data-decide]').forEach((b) => b.addEventListener('click', () => run(b, async () => {
     await api(`/api/approvals/${b.dataset.id}`, { method: 'POST', body: { decision: b.dataset.decide } });
     route({ keepScroll: true });
   })));
   $$('[data-slack]').forEach((b) => b.addEventListener('click', () => run(b, async () => {
     // Slack interactivity posts form-encoded `payload` JSON
-    const payload = { type: 'block_actions', user: { id: 'U0EITAN', name: 'Eitan B.' }, actions: [{ action_id: 'discount_approve', value: b.dataset.slack }] };
+    const payload = { type: 'block_actions', user: { id: 'U0EITAN', name: approver.name }, actions: [{ action_id: 'discount_approve', value: b.dataset.slack }] };
     const res = await fetch('/webhooks/slack', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ payload: JSON.stringify(payload) }) });
     if (!res.ok) throw new Error((await res.json()).error);
     route({ keepScroll: true });
@@ -1527,7 +1554,7 @@ async function renderLog(query = new URLSearchParams()) {
       ${rows.map((a) => `
         <details class="act" data-id="${a.id}" ${state.openActs.has(a.id) ? 'open' : ''}>
           <summary>
-            <span class="act-ico t-${toneOf(a)}" aria-hidden="true">${esc(a.icon)}</span>
+            <span class="act-ico t-${toneOf(a)}" aria-hidden="true">${icon(a.icon)}</span>
             <span class="grow">
               <span class="act-text">${esc(a.outcome)}</span>
               <span class="muted xs">${esc(a.actor)} · ${rel(a.ts)}${a.steps.length ? ` · ${a.steps.length} ${a.steps.length === 1 ? 'step' : 'steps'}` : ''}</span>
@@ -1537,7 +1564,7 @@ async function renderLog(query = new URLSearchParams()) {
           <ol class="act-steps">
             ${a.steps.map((x) => `
               <li>
-                <span class="step-mark ${x.ok ? 'ok' : 'err'}" aria-label="${x.ok ? 'Done' : 'Failed'}">${x.ok ? '✓' : '✕'}</span>
+                <span class="step-mark ${x.ok ? 'ok' : 'err'}" aria-label="${x.ok ? 'Done' : 'Failed'}">${icon(x.ok ? 'i-done' : 'i-x')}</span>
                 <div class="grow">
                   <div><b>${esc(SYSTEMS[x.system]?.name ?? x.system)}</b> · ${esc(x.summary)}</div>
                   <details class="tech"><summary class="xs muted">Technical details</summary>
@@ -1567,7 +1594,7 @@ function renderConnections() {
   view.innerHTML = `
     <div class="page-head">
       <div><h1>Connections</h1><p class="muted">Systems without credentials run in <b>mock</b> mode: every request is built exactly as the real API expects, but never leaves the server.</p></div>
-      <button class="btn danger" id="reset">↺ Reset demo data</button>
+      <button class="btn danger" id="reset">${icon('i-reset')}Reset demo data</button>
     </div>
     <div class="conn-grid">
       ${state.meta.integrations.map((i) => `
@@ -1614,7 +1641,7 @@ function openTour() {
       <li><b>Good morning.</b> <a class="link" href="#/home">Start here</a>: each role lands on its own to-do list with one-click actions. Use <i>View as</i> to switch roles.</li>
       <li><b>Sales: close a deal.</b> <a class="link" href="#/accounts/harborline">Harborline</a> → <i>Closed won</i>. One click updates HubSpot, tells the team in Slack, opens a Jira epic and starts onboarding.</li>
       <li><b>Deal desk.</b> <a class="link" href="#/accounts/northgate">Northgate</a> → <i>Request discount</i> 20%. Then <a class="link" href="#/approvals">Approvals</a> → <i>Simulate Slack click</i>.</li>
-      <li><b>Support.</b> As Ron, open the <a class="link" href="#/inbox">Inbox</a>: queues, the <i>Account snapshot</i>, <i>✨ Summarize &amp; draft reply</i>, then <i>Close</i> with a reason.</li>
+      <li><b>Support.</b> As Ron, open the <a class="link" href="#/inbox">Inbox</a>: queues, the <i>Account snapshot</i>, <i>Summarize &amp; draft reply</i>, then <i>Close</i> with a reason.</li>
       <li><b>Customer Success.</b> As Dana, open <a class="link" href="#/portfolio">My portfolio</a>: accounts by risk. Open Meridian's <i>Health &amp; usage</i> tab, then <i>Check for anomalies</i>, and <a class="link" href="#/requests">Feature requests</a> → <i>Tell the customer</i>.</li>
       <li><b>Onboarding.</b> <a class="link" href="#/onboarding">Onboarding</a> → <i>Sync all from Snowflake</i>. Usage-based steps tick themselves off.</li>
       <li><b>Under the hood.</b> The <a class="link" href="#/log">Activity log</a> tells the story of every action in plain words.</li>

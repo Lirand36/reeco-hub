@@ -11,13 +11,13 @@ const MAX = 150;
 let activities = [];
 
 export function withActivity(actor, fn) {
-  const act = { id: randomUUID(), ts: new Date().toISOString(), actor, outcome: null, icon: '•', tone: '' };
+  const act = { id: randomUUID(), ts: new Date().toISOString(), actor, outcome: null, icon: 'i-done', tone: '' };
   return als.run(act, async () => {
     try {
       return await fn();
     } catch (err) {
       // Validation mistakes (4xx) aren't worth logging; a system failing is.
-      if (!err.status || err.status >= 500) Object.assign(act, { outcome: err.message, icon: '⚠', tone: 'bad', failed: true });
+      if (!err.status || err.status >= 500) Object.assign(act, { outcome: err.message, icon: 'i-alert', tone: 'bad', failed: true });
       throw err; // the person who clicked sees the error from the response
     } finally {
       if (act.outcome) {
@@ -40,7 +40,7 @@ export function setActor(name) {
 
 // The one sentence a user sees. Later calls in the same action replace earlier ones
 // (e.g. "deal moved" → "deal won, onboarding started").
-export function announce(text, { icon = '✓', tone = 'good', accountId } = {}) {
+export function announce(text, { icon = 'i-done', tone = 'good', accountId } = {}) {
   const act = current();
   if (!act) return;
   Object.assign(act, { outcome: text, icon, tone, accountId: accountId ?? act.accountId });
