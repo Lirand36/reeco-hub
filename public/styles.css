@@ -643,21 +643,21 @@ dialog.drawer[open] { animation: slide-in .18s ease-out; }
 .dz.lost { color: var(--bad); }
 .dz.drop-on.won { background: var(--good-soft); border-color: var(--good); }
 .dz.drop-on.lost { background: var(--bad-soft); border-color: var(--bad); }
-.today { margin-bottom: 16px; }
-.today-row { display: flex; gap: 12px; align-items: center; padding: 12px 18px; border-bottom: 1px solid var(--border); position: relative; }
-.today-row:last-of-type { border-bottom: 0; }
-.today-row::before { content: ''; position: absolute; left: 0; top: 12px; bottom: 12px; width: 3px; border-radius: 0 3px 3px 0; background: var(--edge, transparent); }
-.today-row.t-bad { --edge: var(--bad); }
-.today-row.t-warn { --edge: var(--warn); }
-.today-row.t-idea { --edge: var(--info); }
-.today-ico { font-size: 18px; width: 24px; text-align: center; flex: none; }
-.today-more { margin: 4px 12px 10px; }
 .link-strong { font-weight: 600; }
 .link-strong:hover { color: var(--brand-ink); }
 .pl-table td { vertical-align: top; }
 .pl-table .pl-next { min-width: 260px; max-width: 360px; }
 .pl-table select.input.sm { max-width: 170px; }
 .seg-inline button .ico { width: 14px; height: 14px; }
+/* other signals on a deal */
+.sig-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.sig-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); font: inherit; font-size: 12px; cursor: pointer; color: var(--muted); }
+.sig-chip:hover { border-color: var(--border-strong); color: var(--text); }
+.sig-chip.t-bad { color: var(--bad); }
+.sig-chip.t-warn { color: var(--warn); }
+.sig-chip.t-idea { color: var(--info); }
+.deal .sig-chips { margin-top: 2px; }
+.deal .sig-chip { padding: 2px 7px; }
 /* deal pop-ups */
 dialog:has(.wide-form) { width: min(560px, calc(100vw - 32px)); }
 .gate { border: 0; padding: 0; margin: 0 0 6px; }
@@ -676,8 +676,5 @@ dialog:has(.wide-form) { width: min(560px, calc(100vw - 32px)); }
   .pl-table td[data-label="Deal"], .pl-table td[data-label="Next best action"] { grid-column: 1 / -1; }
   .pl-table td[data-label]:not([data-label="Deal"]):not([data-label="Next best action"])::before { content: attr(data-label); display: block; font-size: 11px; color: var(--muted); }
   .pl-table td.num-col { text-align: left; }
-  .today-row { flex-wrap: wrap; }
-  .today-row .grow { flex: 1 1 calc(100% - 40px); }
-  .today-row .btn { margin-left: 36px; }
   .drop-closed { display: none; }
 }

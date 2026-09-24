@@ -394,6 +394,28 @@ function replyCell(a) {
 }
 const signalTone = (x) => (x.priority === 'high' || x.priority === 'urgent' ? 'bad' : x.type === 'similar' ? 'idea' : x.priority === 'normal' ? 'warn' : 'calm');
 const nextLine = (x) => (x ? `<span class="next-act t-${signalTone(x)}"><span aria-hidden="true">${esc(x.icon)}</span> ${esc(x.title)}</span>` : '');
+// The deal's other signals, as small chips under the next action; a click shows the detail and its button.
+const otherSignals = (a) => a.signals.filter((x) => x !== a.next && x.type !== 'next' && !(a.next && x.type === a.next.type));
+const sigChips = (a, { compact = false } = {}) => {
+  const rest = otherSignals(a);
+  return rest.length ? `<div class="sig-chips">${rest.map((x) => `<button class="sig-chip t-${signalTone(x)}" data-sig-open="${esc(a.id)}" data-sig="${esc(x.type)}" title="${esc(x.title)}" aria-label="${esc(x.title)}"><span aria-hidden="true">${esc(x.icon)}</span>${compact ? '' : ` ${esc(x.title)}`}</button>`).join('')}</div>` : '';
+};
+function signalDialog(a, x) {
+  const dlg = $('#modal');
+  dlg.innerHTML = `<form method="dialog">
+    <div class="muted small">${esc(a.name)} · ${esc(stageName(a.deal.stage))} · ${moneyCompact(a.deal.amount)}</div>
+    <h2 style="margin-top:4px"><span aria-hidden="true">${esc(x.icon)}</span> ${esc(x.title)}</h2>
+    <p class="small">${esc(x.detail)}</p>
+    ${x.done ? `<p class="muted small">${esc(x.done)}.</p>` : ''}
+    <div class="dialog-actions">${x.cta ? `<button class="btn primary" value="go">${esc(x.cta.label)}</button>` : ''}<button class="btn" value="cancel">Close</button></div></form>`;
+  $('form', dlg).addEventListener('submit', (e) => {
+    if (e.submitter?.value !== 'go') return;
+    e.preventDefault();
+    dlg.close();
+    runDealCta(a, x, null);
+  });
+  dlg.showModal();
+}
 const ctaBtn = (a, x, primary) => (x?.cta ? `<button class="btn sm ${primary ? 'primary' : ''}" data-cta="${esc(a.id)}" data-sig="${esc(x.type)}">${esc(x.cta.label)}</button>` : x?.done ? `<span class="muted xs">${esc(x.done)}</span>` : '');
 
 const PL_COLS = [
@@ -417,10 +439,6 @@ async function renderPipeline(query = new URLSearchParams()) {
   const total = deals.reduce((s, a) => s + a.deal.amount, 0);
   const soon = deals.filter((a) => a.deal.closeDate && new Date(a.deal.closeDate) >= new Date() && new Date(a.deal.closeDate) - Date.now() < 30 * 86400000);
   const quiet = deals.filter((a) => a.signals.some((x) => x.type === 'silent'));
-  const today = deals.flatMap((a) => a.signals.filter((x) => x.cta && (['urgent', 'high'].includes(x.priority) || ['silent', 'similar', 'details'].includes(x.type))).map((x) => ({ a, x })))
-    .sort((p, q) => PRIORITY_RANK[p.x.priority] - PRIORITY_RANK[q.x.priority] || q.a.deal.amount - p.a.deal.amount);
-  state.plTodayAll ??= false;
-  const todayShown = state.plTodayAll ? today : today.slice(0, 4);
   const cols = PL_COLS.filter((c) => !c.team || team);
   const col = PL_COLS.find((c) => c.id === state.plSort.id) ?? PL_COLS.at(-1);
   const sorted = [...deals].sort((x, y) => { const p = col.key(x), q = col.key(y); return (p < q ? -1 : p > q ? 1 : 0) * state.plSort.dir; });
@@ -446,21 +464,6 @@ async function renderPipeline(query = new URLSearchParams()) {
       <div class="card kpi"><div class="muted small">Close date passed</div><div class="v num ${deals.some((a) => a.signals.some((x) => x.type === 'overdue')) ? 'tone-bad' : ''}">${deals.filter((a) => a.signals.some((x) => x.type === 'overdue')).length}</div></div>
     </div>
 
-    ${today.length ? `<section class="card today">
-      <div class="card-head"><div><h2>Needs you today</h2><div class="muted small">Concrete steps that move ${team ? 'the team\'s' : 'your'} deals forward, most urgent first.</div></div></div>
-      ${todayShown.map(({ a, x }) => `
-        <div class="today-row t-${signalTone(x)}">
-          <span class="today-ico" aria-hidden="true">${esc(x.icon)}</span>
-          <div class="grow">
-            <div><a class="link-strong" href="#/accounts/${esc(a.id)}">${esc(a.name)}</a> ${segBadge(a.segment)} <span class="muted small">· ${esc(stageName(a.deal.stage))} · ${moneyCompact(a.deal.amount)}${team ? ` · ${esc(a.owner)}` : ''}</span></div>
-            <div class="small" style="font-weight:500">${esc(x.title)}</div>
-            <div class="muted small">${esc(x.detail)}</div>
-          </div>
-          ${ctaBtn(a, x, x.priority === 'high')}
-        </div>`).join('')}
-      ${today.length > 4 ? `<button class="btn ghost sm today-more" id="today-more">${state.plTodayAll ? 'Show fewer' : `Show all ${today.length}`}</button>` : ''}
-    </section>` : ''}
-
     ${viewMode === 'board' ? `
     <div class="board board5" id="board">
       ${OPEN_STAGES().map((s) => {
@@ -473,6 +476,7 @@ async function renderPipeline(query = new URLSearchParams()) {
               <div class="muted xs">${moneyCompact(a.deal.amount)} ARR · ${a.properties} ${a.properties === 1 ? 'property' : 'properties'}${team ? ` · ${esc(a.owner)}` : ''}</div>
               <div class="xs deal-meta"><span>${a.deal.closeDate ? `Closes ${closeCell(a)}` : ''}</span><span>Reply ${replyCell(a)}</span></div>
               ${a.next ? `<button class="next-btn" data-cta="${esc(a.id)}" data-sig="${esc(a.next.type)}" ${a.next.cta ? '' : 'disabled'} title="${esc(a.next.detail)}">${nextLine(a.next)}</button>` : ''}
+              ${sigChips(a, { compact: true })}
             </article>`).join('') || '<div class="muted xs col-empty">No deals</div>'}
         </div>`;
       }).join('')}
@@ -496,7 +500,7 @@ async function renderPipeline(query = new URLSearchParams()) {
             <td data-label="Close date" class="small">${closeCell(a)}</td>
             ${team ? `<td data-label="Owner" class="small">${esc(a.owner)}</td>` : ''}
             <td data-label="Last reply" class="small">${replyCell(a)}</td>
-            <td data-label="Next best action" class="pl-next">${a.next ? `<div>${nextLine(a.next)}</div><div class="muted xs">${esc(a.next.detail)}</div><div style="margin-top:6px">${ctaBtn(a, a.next, a.next.priority === 'high')}</div>` : ''}</td>
+            <td data-label="Next best action" class="pl-next">${a.next ? `<div>${nextLine(a.next)}</div><div class="muted xs">${esc(a.next.detail)}</div><div style="margin-top:6px">${ctaBtn(a, a.next, a.next.priority === 'high')}</div>${sigChips(a)}` : ''}</td>
           </tr>`).join('') || `<tr><td colspan="${cols.length}" class="empty">No open deals.</td></tr>`}</tbody>
       </table>
     </div>`}`;
@@ -509,11 +513,15 @@ async function renderPipeline(query = new URLSearchParams()) {
     state.plSort = { id: b.dataset.plsort, dir: same ? -state.plSort.dir : 1 };
     renderPipeline();
   }));
-  $('#today-more')?.addEventListener('click', () => { state.plTodayAll = !state.plTodayAll; renderPipeline(); });
   $$('[data-cta]').forEach((b) => b.addEventListener('click', (e) => {
     e.preventDefault(); e.stopPropagation();
     const a = byId[b.dataset.cta];
     runDealCta(a, a.signals.find((x) => x.type === b.dataset.sig), b);
+  }));
+  $$('[data-sig-open]').forEach((b) => b.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const a = byId[b.dataset.sigOpen];
+    signalDialog(a, a.signals.find((x) => x.type === b.dataset.sig));
   }));
   $$('[data-move]').forEach((sel) => sel.addEventListener('change', () => {
     const a = byId[sel.dataset.move];
