@@ -1,5 +1,5 @@
 // Sales signals: what each open deal needs next, so reps act instead of browsing.
-// Used by the Pipeline page, the "Needs you today" strip and the Good morning dashboard.
+// Used by the Pipeline page (board and table) and the Good morning dashboard.
 
 import { DEAL_STAGES, SILENT_DAYS, STAGE_DAYS, STAGE_GATES, db } from './store.js';
 
@@ -181,13 +181,4 @@ export function dealView(a) {
     draft: signals.some((x) => x.type === 'silent') ? followUpDraft(a) : null,
     gaps: gapsSoFar(a),
   };
-}
-
-// The few things across deals that need a rep today, most urgent first.
-export function needsToday(accounts, limit = 6) {
-  return accounts.filter(isOpen)
-    .flatMap((a) => dealSignals(a).filter((x) => ['urgent', 'high'].includes(x.priority) || ['silent', 'similar', 'details'].includes(x.type)).map((x) => ({ a, x })))
-    .filter(({ x }) => x.cta)
-    .sort((p, q) => RANK[p.x.priority] - RANK[q.x.priority] || q.a.deal.amount - p.a.deal.amount)
-    .slice(0, limit);
 }
