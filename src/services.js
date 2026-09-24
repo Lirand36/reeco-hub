@@ -10,7 +10,8 @@ import * as claude from './connectors/claude.js';
 import { bus } from './bus.js';
 import { announce, withActivity } from './activity.js';
 import { CLASSIFICATIONS, classify, classificationLabel, fromCloseReason } from './classify.js';
-import { CLOSE_REASONS, CONFIG, DEAL_STAGES, FR_STATUSES, ONBOARDING_STEPS, PEOPLE, USERS, db, findAccount, findAccountByEmail, findConversation } from './store.js';
+import { CLOSE_REASONS, CONFIG, DEAL_STAGES, FR_STATUSES, ONBOARDING_STEPS, PEOPLE, STAGE_GATES, USERS, db, findAccount, findAccountByEmail, findConversation } from './store.js';
+import { gatesBetween, missingFields } from './deals.js';
 import { anomalyText, computeHealth } from './health.js';
 
 export class HttpError extends Error {
@@ -48,20 +49,122 @@ const track = (event, accountId, actor, props) => snowflake.trackEvent(event, ac
 
 // ---------------------------------------------------------------- sales
 
-export async function changeDealStage(accountId, stage, actor) {
+const GATE_FIELDS = Object.fromEntries(Object.values(STAGE_GATES).flatMap((g) => g.fields.map((f) => [f.id, f])));
+
+// Keeps only known gate fields, with the right types.
+function cleanFields(fields = {}) {
+  const out = {};
+  for (const [k, v] of Object.entries(fields)) {
+    const f = GATE_FIELDS[k];
+    if (!f) continue;
+    if (f.type === 'number') out[k] = v === '' || v == null ? '' : Number(v);
+    else if (f.type === 'multi') out[k] = (Array.isArray(v) ? v : [v]).filter((x) => f.options.includes(x));
+    else if (f.type === 'select') out[k] = f.options.includes(v) ? v : '';
+    else out[k] = String(v ?? '').trim();
+  }
+  return out;
+}
+const hsProps = (fields) => Object.fromEntries(Object.entries(fields).map(([k, v]) => [GATE_FIELDS[k].hs, k === 'closeDate' ? v : Array.isArray(v) ? v.join(';') : String(v)]));
+function applyFields(a, fields) {
+  for (const [k, v] of Object.entries(fields)) {
+    if (k === 'closeDate') a.deal.closeDate = v ? new Date(`${v}T12:00:00Z`).toISOString() : null;
+    else a.deal.fields[k] = v;
+  }
+}
+const seOf = (name) => PEOPLE.solutionsEngineers.find((p) => p.name === name);
+const fmtDemo = (v) => (v ? new Date(v).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'date to be set');
+
+// Automation: a demo is set, so the Solutions Engineer gets everything they need in Slack.
+async function loopInSe(a, actor) {
+  const f = a.deal.fields;
+  const se = seOf(f.se);
+  if (!se) return null;
+  await slack.dm(se.slackId, se.name, `Demo: ${a.name} on ${fmtDemo(f.demoDate)}`, [
+    slack.section(`:tv: *You're on the ${a.name} demo* with ${actor}\n*When:* ${fmtDemo(f.demoDate)}\n*Show:* ${(f.useCases ?? []).join(', ') || 'to be agreed'}\n*Attendees:* ${f.attendees || 'to be confirmed'}`),
+    slack.section(`*Pain:* ${f.pain || 'n/a'}\n*ERP:* ${f.erp || 'n/a'} · ${a.properties} properties · ${money(a.deal.amount)} ARR`),
+    slack.context(`<${hubUrl(`/accounts/${a.id}`)}|Open in Reeco Hub>`),
+  ]);
+  return se;
+}
+
+export async function changeDealStage(accountId, stage, actor, fields = {}) {
   const a = getAccount(accountId);
   need(DEAL_STAGES.some((s) => s.id === stage), 400, 'Invalid stage');
   if (stage === a.deal.stage) return { account: a };
   const pending = db.approvals.find((p) => p.accountId === a.id && p.status === 'pending');
   need(!(stage === 'closedwon' && pending), 409, 'A discount approval is still pending for this deal');
+  const incoming = cleanFields(fields);
+  const missing = missingFields(a, gatesBetween(a.deal.stage, stage), incoming);
+  need(!missing.length, 400, `Please fill in: ${missing.map((f) => f.label.toLowerCase()).join(', ')}.`);
 
-  failIfRejected(await hubspot.updateDeal(a.deal.id, { dealstage: stage }, 'Update deal stage', `Moved the deal to “${stageLabel(stage)}”`));
+  const seBefore = a.deal.fields.se;
+  failIfRejected(await hubspot.updateDeal(a.deal.id, { dealstage: stage, ...hsProps(incoming) }, 'Update deal stage',
+    `Moved the deal to “${stageLabel(stage)}”${Object.keys(incoming).length ? ' and saved the deal details' : ''}`));
   const from = a.deal.stage;
   a.deal.stage = stage;
-  await track('deal.stage_changed', a.id, actor, { from, to: stage });
-  announce(stage === 'closedlost' ? `${a.name} marked as lost.` : `${a.name} moved to ${stageLabel(stage)}.`, { icon: stage === 'closedlost' ? '•' : '→', accountId: a.id });
+  a.deal.stageEnteredAt = now();
+  applyFields(a, incoming);
+  await track('deal.stage_changed', a.id, actor, { from, to: stage, ...(stage === 'closedlost' ? { reason: a.deal.fields.lostReason, competitor: a.deal.fields.competitor || null } : {}) });
 
-  if (stage === 'closedwon') await kickOffOnboarding(a, actor);
+  if (stage === 'closedwon') {
+    await kickOffOnboarding(a, actor);
+  } else if (stage === 'closedlost') {
+    announce(`${a.name} marked as lost (${a.deal.fields.lostReason}${a.deal.fields.competitor ? `: ${a.deal.fields.competitor}` : ''}). The reason is in HubSpot for the win/loss report.`, { icon: '•', accountId: a.id });
+  } else if (stage === 'presentationscheduled' || (a.deal.fields.se && a.deal.fields.se !== seBefore)) {
+    const se = await loopInSe(a, actor);
+    announce(`${a.name} moved to ${stageLabel(stage)}.${se ? ` ${se.name} (${se.title}) got the demo details in Slack.` : ''}`, { icon: '→', accountId: a.id });
+  } else {
+    announce(`${a.name} moved to ${stageLabel(stage)}.${Object.keys(incoming).length ? ' Deal details saved to HubSpot.' : ''}`, { icon: '→', accountId: a.id });
+  }
+  changed(a.id);
+  return { account: a };
+}
+
+// Fill in deal details without changing the stage (e.g. a missing SE or a new close date).
+export async function updateDealFields(accountId, fields, actor) {
+  const a = getAccount(accountId);
+  const incoming = cleanFields(fields);
+  need(Object.keys(incoming).length, 400, 'Nothing to save');
+  const seBefore = a.deal.fields.se;
+  failIfRejected(await hubspot.updateDeal(a.deal.id, hsProps(incoming), 'Update deal details', 'Saved the deal details'));
+  applyFields(a, incoming);
+  await track('deal.fields_updated', a.id, actor, { fields: Object.keys(incoming) });
+  const se = a.deal.fields.se && a.deal.fields.se !== seBefore ? await loopInSe(a, actor) : null;
+  const what = Object.keys(incoming).length === 1 && incoming.closeDate
+    ? `Close date for ${a.name} moved to ${new Date(a.deal.closeDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}.`
+    : `${a.name}'s deal details saved to HubSpot.`;
+  announce(`${what}${se ? ` ${se.name} (${se.title}) got the demo details in Slack.` : ''}`, { icon: '✎', accountId: a.id });
+  changed(a.id);
+  return { account: a };
+}
+
+export async function sendFollowUp(accountId, { subject, body }, actor) {
+  const a = getAccount(accountId);
+  need(subject?.trim() && body?.trim(), 400, 'Subject and message are required');
+  failIfRejected(await hubspot.logEmail(a.deal.id, { to: a.contact.email, subject: subject.trim(), body: body.trim() }));
+  a.deal.activities.unshift({ type: 'email', dir: 'out', at: now(), subject: subject.trim() });
+  a.deal.followedUpAt = now();
+  await track('deal.follow_up_sent', a.id, actor, {});
+  announce(`Follow-up sent to ${a.contact.name} at ${a.name} and logged on the deal in HubSpot.`, { icon: '✉', accountId: a.id });
+  changed(a.id);
+  return { account: a };
+}
+
+// "A colleague won something similar": DM them in Slack with the context, so the rep gets the playbook.
+export async function askColleague(accountId, wonId, actor) {
+  const a = getAccount(accountId);
+  const w = db.wonDeals.find((x) => x.id === wonId);
+  need(w, 404, 'Deal not found');
+  const colleague = USERS.find((u) => u.name === w.owner);
+  need(colleague?.slackId, 400, `${w.owner} isn't on Slack`);
+  failIfRejected(await slack.dm(colleague.slackId, colleague.name, `${actor} would like to learn from your ${w.account} win`, [
+    slack.section(`:bulb: *${actor} is working ${a.name}*, which looks a lot like your *${w.account}* win.\n${a.segment} · ${a.properties} properties · ${a.deal.fields.erp || 'ERP n/a'} · ${money(a.deal.amount)} ARR · now in ${stageLabel(a.deal.stage)}`),
+    slack.section(`*${w.account}:* ${w.value}.\n_What worked:_ ${w.how}.\nCould you share what made it click? 15 minutes would help.`),
+    slack.context(`<${hubUrl(`/accounts/${a.id}`)}|Open ${a.name} in Reeco Hub>`),
+  ]));
+  a.deal.askedColleague = { wonId, at: now() };
+  await track('deal.asked_colleague', a.id, actor, { wonId, colleague: colleague.name });
+  announce(`Asked ${colleague.name} in Slack how they won ${w.account}, for ${a.name}.`, { icon: '💡', accountId: a.id });
   changed(a.id);
   return { account: a };
 }

@@ -39,3 +39,21 @@ export function createNote(companyId, text) {
     mockResponse: () => ({ id: String(Math.floor(Math.random() * 1e10)), createdAt: new Date().toISOString() }),
   });
 }
+
+// Logs a sales email on the deal's timeline (association type 210 = email → deal).
+export function logEmail(dealId, { to, subject, body }) {
+  return send({
+    system: 'hubspot',
+    action: 'Log email',
+    summary: `Logged the email “${subject}” on the deal`,
+    method: 'POST',
+    url: `${BASE}/crm/v3/objects/emails`,
+    headers: auth(),
+    body: {
+      properties: { hs_timestamp: new Date().toISOString(), hs_email_direction: 'EMAIL', hs_email_status: 'SENT', hs_email_subject: subject, hs_email_text: body, hs_email_headers: JSON.stringify({ to: [{ email: to }] }) },
+      associations: [{ to: { id: dealId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 210 }] }],
+    },
+    live: isLive(),
+    mockResponse: () => ({ id: String(Math.floor(Math.random() * 1e10)), createdAt: new Date().toISOString() }),
+  });
+}

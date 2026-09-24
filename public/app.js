@@ -236,38 +236,332 @@ async function renderHome() {
 }
 
 // ---------- pipeline ----------
-async function renderPipeline() {
-  const accounts = await api('/api/accounts');
-  const open = accounts.filter((a) => !['closedwon', 'closedlost'].includes(a.deal.stage));
-  const cols = state.meta.stages.filter((s) => s.id !== 'closedlost');
-  const pending = accounts.filter((a) => a.pendingApproval).length;
-  const weighted = open.reduce((s, a) => s + a.deal.amount * (1 - (a.deal.discountPct || 0) / 100), 0);
+// ---------- deal pop-ups (shared by the pipeline and the account page) ----------
+const OPEN_STAGES = () => state.meta.stages.filter((s) => !['closedwon', 'closedlost'].includes(s.id));
+const stageName = (id) => state.meta.stages.find((s) => s.id === id)?.label ?? id;
+const stageIdx = (id) => state.meta.stages.findIndex((s) => s.id === id);
+
+// Mirrors src/deals.js: forward moves collect every gate on the way; Closed lost only asks why.
+function gatesBetween(from, to) {
+  const G = state.meta.stageGates;
+  if (to === 'closedlost') return ['closedlost'];
+  const i = stageIdx(from), j = stageIdx(to);
+  if (j <= i) return [];
+  return state.meta.stages.slice(i + 1, j + 1).map((s) => s.id).filter((id) => G[id] && id !== 'closedlost');
+}
+function gateValue(a, id) {
+  if (id === 'closeDate') return a.deal.closeDate ? a.deal.closeDate.slice(0, 10) : '';
+  const v = a.deal.fields?.[id];
+  if (v != null && v !== '') return v;
+  if (id === 'properties') return a.properties;
+  if (id === 'erp') return a.platform?.erp ?? a.platformErp ?? '';
+  return '';
+}
+
+function gateFieldsHtml(a, gates) {
+  const G = state.meta.stageGates;
+  return gates.map((g) => `
+    <fieldset class="gate">
+      ${gates.length > 1 ? `<legend>${esc(G[g].title)}</legend>` : ''}
+      ${G[g].fields.map((f) => {
+        const v = gateValue(a, f.id);
+        const id = `gf-${f.id}`;
+        const req = f.requiredIf ? '' : 'required';
+        const label = `<label for="${id}">${esc(f.label)}${f.requiredIf ? ` <span class="muted xs">(needed if “${esc(f.requiredIf[1])}”)</span>` : ''}</label>`;
+        if (f.type === 'textarea') return `<div class="field">${label}<textarea class="input" id="${id}" name="${f.id}" rows="2" ${req} placeholder="${esc(f.placeholder ?? '')}">${esc(v)}</textarea></div>`;
+        if (f.type === 'select') return `<div class="field">${label}<select class="input" id="${id}" name="${f.id}" ${req}><option value="">Choose…</option>${f.options.map((o) => `<option ${o === v ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select></div>`;
+        if (f.type === 'multi') return `<div class="field"><span class="flabel">${esc(f.label)}</span><div class="checks" data-multi="${f.id}">${f.options.map((o) => `<label class="check-pill"><input type="checkbox" name="${f.id}" value="${esc(o)}" ${(v || []).includes(o) ? 'checked' : ''} /> ${esc(o)}</label>`).join('')}</div></div>`;
+        return `<div class="field">${label}<input class="input" id="${id}" name="${f.id}" type="${f.type}" value="${esc(v)}" ${req} placeholder="${esc(f.placeholder ?? '')}" ${f.type === 'number' ? 'min="0"' : ''} />${f.hint ? `<div class="muted xs">${esc(f.hint)}</div>` : ''}</div>`;
+      }).join('')}
+    </fieldset>`).join('');
+}
+
+// Validates the pieces the browser can't: at least one checkbox in a multi field, conditional fields.
+function gateCheck(form, gates) {
+  const G = state.meta.stageGates;
+  for (const g of gates) for (const f of G[g].fields) {
+    if (f.type === 'multi' && !$$(`input[name="${f.id}"]:checked`, form).length) return `Pick at least one: ${f.label.toLowerCase()}.`;
+    if (f.requiredIf && form[f.requiredIf[0]]?.value === f.requiredIf[1] && !form[f.id].value.trim()) return `Please add the ${f.label.toLowerCase()}.`;
+  }
+  return null;
+}
+function collectGate(form, gates) {
+  const G = state.meta.stageGates, out = {};
+  for (const g of gates) for (const f of G[g].fields) out[f.id] = f.type === 'multi' ? $$(`input[name="${f.id}"]:checked`, form).map((x) => x.value) : form[f.id]?.value ?? '';
+  return out;
+}
+
+// A small form dialog: validates, calls onSubmit(form), closes on success.
+function formDialog(html, submitLabel, onSubmit, { danger = false } = {}) {
+  const dlg = $('#modal');
+  dlg.innerHTML = `<form method="dialog" class="wide-form" novalidate>${html}<p class="form-error" role="alert" hidden></p>
+    <div class="dialog-actions"><button class="btn ${danger ? 'danger-fill' : 'primary'}" value="ok">${esc(submitLabel)}</button><button class="btn" value="cancel" formnovalidate>Cancel</button></div></form>`;
+  const form = $('form', dlg);
+  const err = $('.form-error', form);
+  form.addEventListener('submit', (e) => {
+    if (e.submitter?.value !== 'ok') return;
+    e.preventDefault();
+    err.hidden = true;
+    if (!form.checkValidity()) { form.reportValidity(); return; }
+    run(e.submitter, async () => {
+      // Errors stay in the dialog, next to what needs fixing
+      try { await onSubmit(form); dlg.close(); } catch (x) { err.textContent = x.message; err.hidden = false; }
+    });
+  });
+  dlg.showModal();
+  $('input:not([type=checkbox]), textarea, select', form)?.focus();
+  return form;
+}
+
+// Move a deal, asking for whatever the target stage requires first.
+function moveDeal(a, to, after = () => route({ keepScroll: true })) {
+  if (to === a.deal.stage) return;
+  const gates = gatesBetween(a.deal.stage, to);
+  const post = (fields) => api(`/api/accounts/${a.id}/deal-stage`, { method: 'POST', body: { stage: to, fields } }).then(after);
+  const G = state.meta.stageGates;
+  if (to === 'closedwon') {
+    return formDialog(`<h2>Close ${esc(a.name)} as won?</h2>
+      ${gates.length ? `<p class="muted small" style="margin-bottom:8px">A couple of details first. They're saved to HubSpot.</p>${gateFieldsHtml(a, gates)}` : ''}
+      <p class="muted small" style="margin:10px 0 6px">Then the onboarding automation runs:</p>
+      <ul class="small plain-list"><li>HubSpot deal → <b>Closed won</b></li><li>Slack: announce in <span class="mono">#deals</span>, create <span class="mono">#onb-${esc(a.id)}</span> with the checklist</li><li>Jira: onboarding epic in <span class="mono">ONB</span></li></ul>`,
+      'Close won', (form) => { const m = gateCheck(form, gates); if (m) throw new Error(m); return post(collectGate(form, gates)); });
+  }
+  if (!gates.length) return run(null, () => post({}));
+  const last = G[gates.at(-1)];
+  const form = formDialog(`<h2>${esc(to === 'closedlost' ? `${a.name}: ${last.title.toLowerCase()}` : `Move ${a.name} to ${stageName(to)}`)}</h2>
+    <p class="muted small" style="margin-bottom:12px">${esc(last.why)} Prefilled from HubSpot; your answers are saved back to the deal.</p>
+    ${gateFieldsHtml(a, gates)}`,
+    to === 'closedlost' ? 'Mark as lost' : `Move to ${stageName(to)}`,
+    (f) => { const m = gateCheck(f, gates); if (m) throw new Error(m); return post(collectGate(f, gates)); },
+    { danger: to === 'closedlost' });
+  return form;
+}
+
+function editDealDetails(a, gates, after = () => route({ keepScroll: true })) {
+  formDialog(`<h2>${esc(a.name)}: deal details</h2>
+    <p class="muted small" style="margin-bottom:12px">Needed for the stage it's in. Saved to HubSpot${gates.includes('presentationscheduled') ? ', and the Solutions Engineer gets the demo details in Slack' : ''}.</p>
+    ${gateFieldsHtml(a, gates)}`, 'Save details',
+    (f) => { const m = gateCheck(f, gates); if (m) throw new Error(m); return api(`/api/accounts/${a.id}/deal-fields`, { method: 'POST', body: { fields: collectGate(f, gates) } }).then(after); });
+}
+
+function editCloseDate(a, after = () => route({ keepScroll: true })) {
+  const soon = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
+  formDialog(`<h2>${esc(a.name)}: close date</h2>
+    <p class="muted small" style="margin-bottom:12px">Currently ${a.deal.closeDate ? new Date(a.deal.closeDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'not set'}. Pick a date you believe in; the forecast uses it.</p>
+    <div class="field"><label for="cd">New close date</label><input class="input" id="cd" name="closeDate" type="date" required min="${new Date().toISOString().slice(0, 10)}" value="${soon}" /></div>`,
+    'Save to HubSpot', (f) => api(`/api/accounts/${a.id}/deal-fields`, { method: 'POST', body: { fields: { closeDate: f.closeDate.value } } }).then(after));
+}
+
+function writeFollowUp(a, draft, after = () => route({ keepScroll: true })) {
+  formDialog(`<h2>Follow up with ${esc(a.contact.name)}</h2>
+    <div class="field"><label>To</label><div class="input ro">${esc(draft.to)}</div></div>
+    <div class="field"><label for="fu-s">Subject</label><input class="input" id="fu-s" name="subject" required value="${esc(draft.subject)}" /></div>
+    <div class="field"><label for="fu-b">Message</label><textarea class="input" id="fu-b" name="body" rows="9" required>${esc(draft.body)}</textarea></div>
+    <p class="muted small">Sent from your mailbox and logged on the deal in HubSpot.</p>`,
+    'Send follow-up', (f) => api(`/api/accounts/${a.id}/follow-up`, { method: 'POST', body: { subject: f.subject.value, body: f.body.value } }).then(after));
+}
+
+// One place that knows what each next-action button does.
+function runDealCta(a, x, btn) {
+  const c = x.cta;
+  if (c.kind === 'followup') return writeFollowUp(a, a.draft);
+  if (c.kind === 'closedate') return editCloseDate(a);
+  if (c.kind === 'details') return editDealDetails(a, a.gaps);
+  if (c.kind === 'stage') return moveDeal(a, c.to);
+  if (c.kind === 'ask') return run(btn, async () => { await api(`/api/accounts/${a.id}/ask-colleague`, { method: 'POST', body: { wonId: c.wonId } }); route({ keepScroll: true }); });
+}
+
+// ---------- pipeline ----------
+const PRIORITY_RANK = { urgent: 0, high: 1, normal: 2, low: 3 };
+const prefKey = () => `reeco-hub-pipeline-view:${user().id}`;
+function pipelineView() {
+  try { return localStorage.getItem(prefKey()) || 'board'; } catch { return 'board'; }
+}
+function setPipelineView(v) {
+  try { localStorage.setItem(prefKey(), v); } catch { /* per-viewer convenience only */ }
+}
+const fmtDay = (iso) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+function closeCell(a) {
+  if (!a.deal.closeDate) return '<span class="muted">–</span>';
+  const late = new Date(a.deal.closeDate) < new Date();
+  return `<span class="${late ? 'tone-bad' : ''}" title="${late ? 'Close date has passed' : ''}">${fmtDay(a.deal.closeDate)}</span>`;
+}
+function replyCell(a) {
+  if (!a.lastReplyAt) return '<span class="muted">No reply yet</span>';
+  const d = Math.floor((Date.now() - new Date(a.lastReplyAt)) / 86400000);
+  const tone = d >= state.meta.silentDays.high ? 'tone-bad' : d >= state.meta.silentDays.flag ? 'tone-warn' : '';
+  return `<span class="${tone}">${d ? `${d}d ago` : 'today'}</span>`;
+}
+const signalTone = (x) => (x.priority === 'high' || x.priority === 'urgent' ? 'bad' : x.type === 'similar' ? 'idea' : x.priority === 'normal' ? 'warn' : 'calm');
+const nextLine = (x) => (x ? `<span class="next-act t-${signalTone(x)}"><span aria-hidden="true">${esc(x.icon)}</span> ${esc(x.title)}</span>` : '');
+const ctaBtn = (a, x, primary) => (x?.cta ? `<button class="btn sm ${primary ? 'primary' : ''}" data-cta="${esc(a.id)}" data-sig="${esc(x.type)}">${esc(x.cta.label)}</button>` : x?.done ? `<span class="muted xs">${esc(x.done)}</span>` : '');
+
+const PL_COLS = [
+  { id: 'deal', label: 'Deal', key: (a) => a.name.toLowerCase() },
+  { id: 'stage', label: 'Stage', key: (a) => stageIdx(a.deal.stage) },
+  { id: 'amount', label: 'ARR', key: (a) => a.deal.amount, num: true },
+  { id: 'close', label: 'Close date', key: (a) => a.deal.closeDate ?? '9' },
+  { id: 'owner', label: 'Owner', key: (a) => a.owner, team: true },
+  { id: 'reply', label: 'Last reply', key: (a) => a.lastReplyAt ?? '' },
+  { id: 'next', label: 'Next best action', key: (a) => PRIORITY_RANK[a.next?.priority ?? 'low'] * 1e9 - a.deal.amount },
+];
+
+async function renderPipeline(query = new URLSearchParams()) {
+  const me = user();
+  state.plScope ??= me.approver ? 'team' : 'mine';
+  state.plSort ??= { id: 'next', dir: 1 };
+  const viewMode = pipelineView();
+  const all = await api('/api/pipeline');
+  const deals = all.filter((a) => state.plScope === 'team' || a.owner === me.name);
+  const team = state.plScope === 'team';
+  const total = deals.reduce((s, a) => s + a.deal.amount, 0);
+  const soon = deals.filter((a) => a.deal.closeDate && new Date(a.deal.closeDate) >= new Date() && new Date(a.deal.closeDate) - Date.now() < 30 * 86400000);
+  const quiet = deals.filter((a) => a.signals.some((x) => x.type === 'silent'));
+  const today = deals.flatMap((a) => a.signals.filter((x) => x.cta && (['urgent', 'high'].includes(x.priority) || ['silent', 'similar', 'details'].includes(x.type))).map((x) => ({ a, x })))
+    .sort((p, q) => PRIORITY_RANK[p.x.priority] - PRIORITY_RANK[q.x.priority] || q.a.deal.amount - p.a.deal.amount);
+  state.plTodayAll ??= false;
+  const todayShown = state.plTodayAll ? today : today.slice(0, 4);
+  const cols = PL_COLS.filter((c) => !c.team || team);
+  const col = PL_COLS.find((c) => c.id === state.plSort.id) ?? PL_COLS.at(-1);
+  const sorted = [...deals].sort((x, y) => { const p = col.key(x), q = col.key(y); return (p < q ? -1 : p > q ? 1 : 0) * state.plSort.dir; });
 
   view.innerHTML = `
     <div class="page-head">
-      <div><h1>Pipeline</h1><p class="muted">Every deal, synced with HubSpot. Move stages from the account page. Closing a deal starts onboarding automatically.</p></div>
+      <div><h1>Pipeline</h1><p class="muted">${team ? 'Open deals across the team' : 'Your open deals'} and what each one needs next. Synced with HubSpot.</p></div>
+      <div class="row">
+        <div class="seg seg-inline" role="group" aria-label="Whose deals">
+          <button class="${!team ? 'sel' : ''}" data-plscope="mine" aria-pressed="${!team}">My deals</button>
+          <button class="${team ? 'sel' : ''}" data-plscope="team" aria-pressed="${team}">Team</button>
+        </div>
+        <div class="seg seg-inline" role="group" aria-label="View">
+          <button class="${viewMode === 'board' ? 'sel' : ''}" data-plview="board" aria-pressed="${viewMode === 'board'}"><svg class="ico"><use href="#i-board"/></svg>Board</button>
+          <button class="${viewMode === 'table' ? 'sel' : ''}" data-plview="table" aria-pressed="${viewMode === 'table'}"><svg class="ico"><use href="#i-list"/></svg>Table</button>
+        </div>
+      </div>
     </div>
     <div class="kpis">
-      <div class="card kpi"><div class="muted small">Open pipeline (ARR)</div><div class="v num">${moneyCompact(weighted)}</div></div>
-      <div class="card kpi"><div class="muted small">Open deals</div><div class="v num">${open.length}</div></div>
-      <div class="card kpi"><div class="muted small">Properties in pipeline</div><div class="v num">${open.reduce((s, a) => s + a.properties, 0)}</div></div>
-      <div class="card kpi"><div class="muted small">Pending approvals</div><div class="v num" style="color:${pending ? 'var(--warn)' : 'inherit'}">${pending}</div></div>
+      <div class="card kpi"><div class="muted small">Open pipeline (ARR)</div><div class="v num">${moneyCompact(total)}</div><div class="muted xs">${deals.length} ${deals.length === 1 ? 'deal' : 'deals'}</div></div>
+      <div class="card kpi"><div class="muted small">Closing in 30 days</div><div class="v num">${moneyCompact(soon.reduce((s, a) => s + a.deal.amount, 0))}</div><div class="muted xs">${soon.length} ${soon.length === 1 ? 'deal' : 'deals'}</div></div>
+      <div class="card kpi"><div class="muted small">Gone quiet (${state.meta.silentDays.flag}+ days)</div><div class="v num ${quiet.length ? 'tone-warn' : ''}">${quiet.length}</div><div class="muted xs">${moneyCompact(quiet.reduce((s, a) => s + a.deal.amount, 0))} at stake</div></div>
+      <div class="card kpi"><div class="muted small">Close date passed</div><div class="v num ${deals.some((a) => a.signals.some((x) => x.type === 'overdue')) ? 'tone-bad' : ''}">${deals.filter((a) => a.signals.some((x) => x.type === 'overdue')).length}</div></div>
     </div>
-    <div class="board">
-      ${cols.map((s) => {
-        const items = accounts.filter((a) => a.deal.stage === s.id);
-        return `<div class="col ${s.id === 'closedwon' ? 'won' : ''}">
+
+    ${today.length ? `<section class="card today">
+      <div class="card-head"><div><h2>Needs you today</h2><div class="muted small">Concrete steps that move ${team ? 'the team\'s' : 'your'} deals forward, most urgent first.</div></div></div>
+      ${todayShown.map(({ a, x }) => `
+        <div class="today-row t-${signalTone(x)}">
+          <span class="today-ico" aria-hidden="true">${esc(x.icon)}</span>
+          <div class="grow">
+            <div><a class="link-strong" href="#/accounts/${esc(a.id)}">${esc(a.name)}</a> ${segBadge(a.segment)} <span class="muted small">· ${esc(stageName(a.deal.stage))} · ${moneyCompact(a.deal.amount)}${team ? ` · ${esc(a.owner)}` : ''}</span></div>
+            <div class="small" style="font-weight:500">${esc(x.title)}</div>
+            <div class="muted small">${esc(x.detail)}</div>
+          </div>
+          ${ctaBtn(a, x, x.priority === 'high')}
+        </div>`).join('')}
+      ${today.length > 4 ? `<button class="btn ghost sm today-more" id="today-more">${state.plTodayAll ? 'Show fewer' : `Show all ${today.length}`}</button>` : ''}
+    </section>` : ''}
+
+    ${viewMode === 'board' ? `
+    <div class="board board5" id="board">
+      ${OPEN_STAGES().map((s) => {
+        const items = deals.filter((a) => a.deal.stage === s.id).sort((x, y) => y.deal.amount - x.deal.amount);
+        return `<div class="col" data-drop="${s.id}" aria-label="${esc(s.label)}">
           <div class="col-head"><span>${esc(s.label)}</span><span class="muted num">${items.length} · ${moneyCompact(items.reduce((x, a) => x + a.deal.amount, 0))}</span></div>
           ${items.map((a) => `
-            <a class="deal" href="#/accounts/${a.id}">
-              <div class="name">${esc(a.name)}</div>
-              <div class="muted xs">${a.properties} ${a.properties === 1 ? 'property' : 'properties'} · ${esc(a.segment)}</div>
-              <div class="spread"><span class="amt num">${money(a.deal.amount)}</span>
-                ${a.pendingApproval ? '<span class="chip warn">Approval</span>' : a.deal.discountPct ? `<span class="chip">−${a.deal.discountPct}%</span>` : ''}</div>
-            </a>`).join('') || '<div class="muted xs" style="padding:4px">No deals</div>'}
+            <article class="deal" draggable="true" data-deal="${esc(a.id)}" tabindex="0" aria-label="${esc(a.name)}, ${esc(s.label)}">
+              <div class="spread" style="align-items:flex-start"><a class="name" href="#/accounts/${esc(a.id)}">${esc(a.name)}</a>${a.pendingApproval ? '<span class="chip warn" title="Discount waiting for approval">Approval</span>' : ''}</div>
+              <div class="muted xs">${moneyCompact(a.deal.amount)} ARR · ${a.properties} ${a.properties === 1 ? 'property' : 'properties'}${team ? ` · ${esc(a.owner)}` : ''}</div>
+              <div class="xs deal-meta"><span>${a.deal.closeDate ? `Closes ${closeCell(a)}` : ''}</span><span>Reply ${replyCell(a)}</span></div>
+              ${a.next ? `<button class="next-btn" data-cta="${esc(a.id)}" data-sig="${esc(a.next.type)}" ${a.next.cta ? '' : 'disabled'} title="${esc(a.next.detail)}">${nextLine(a.next)}</button>` : ''}
+            </article>`).join('') || '<div class="muted xs col-empty">No deals</div>'}
         </div>`;
       }).join('')}
-    </div>`;
+    </div>
+    <div class="drop-closed" id="drop-closed" hidden>
+      <div class="dz won" data-drop="closedwon">Drop to close won</div>
+      <div class="dz lost" data-drop="closedlost">Drop to mark lost</div>
+    </div>
+    <p class="muted xs" style="margin-top:6px">Drag a deal to move it. If the next stage needs details (like the demo date and Solutions Engineer), you'll be asked for them first.</p>` : `
+    <div class="card table-wrap">
+      <table class="table pl-table">
+        <thead><tr>${cols.map((c) => {
+          const on = c.id === col.id;
+          return `<th class="${c.num ? 'num-col' : ''}" aria-sort="${on ? (state.plSort.dir === 1 ? 'ascending' : 'descending') : 'none'}"><button class="th-sort" data-plsort="${c.id}">${esc(c.label)}<span class="sort-ind" aria-hidden="true">${on ? (state.plSort.dir === 1 ? '▲' : '▼') : ''}</span></button></th>`;
+        }).join('')}</tr></thead>
+        <tbody>${sorted.map((a) => `
+          <tr>
+            <td data-label="Deal"><a class="row-link" href="#/accounts/${esc(a.id)}">${esc(a.name)}</a> ${segBadge(a.segment)}<div class="muted xs">${esc(((x) => x[0].toUpperCase() + x.slice(1))(a.deal.name.split(': ')[1] ?? a.deal.name))}</div></td>
+            <td data-label="Stage"><select class="input sm" data-move="${esc(a.id)}" aria-label="Stage for ${esc(a.name)}">${state.meta.stages.map((s) => `<option value="${s.id}" ${s.id === a.deal.stage ? 'selected' : ''}>${esc(s.label)}</option>`).join('')}</select>${a.daysInStage != null ? `<div class="muted xs">${a.daysInStage}d in stage</div>` : ''}</td>
+            <td data-label="ARR" class="num num-col">${money(a.deal.amount)}</td>
+            <td data-label="Close date" class="small">${closeCell(a)}</td>
+            ${team ? `<td data-label="Owner" class="small">${esc(a.owner)}</td>` : ''}
+            <td data-label="Last reply" class="small">${replyCell(a)}</td>
+            <td data-label="Next best action" class="pl-next">${a.next ? `<div>${nextLine(a.next)}</div><div class="muted xs">${esc(a.next.detail)}</div><div style="margin-top:6px">${ctaBtn(a, a.next, a.next.priority === 'high')}</div>` : ''}</td>
+          </tr>`).join('') || `<tr><td colspan="${cols.length}" class="empty">No open deals.</td></tr>`}</tbody>
+      </table>
+    </div>`}`;
+
+  const byId = Object.fromEntries(all.map((a) => [a.id, a]));
+  $$('[data-plscope]').forEach((b) => b.addEventListener('click', () => { state.plScope = b.dataset.plscope; renderPipeline(); }));
+  $$('[data-plview]').forEach((b) => b.addEventListener('click', () => { setPipelineView(b.dataset.plview); renderPipeline(); }));
+  $$('[data-plsort]').forEach((b) => b.addEventListener('click', () => {
+    const same = state.plSort.id === b.dataset.plsort;
+    state.plSort = { id: b.dataset.plsort, dir: same ? -state.plSort.dir : 1 };
+    renderPipeline();
+  }));
+  $('#today-more')?.addEventListener('click', () => { state.plTodayAll = !state.plTodayAll; renderPipeline(); });
+  $$('[data-cta]').forEach((b) => b.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const a = byId[b.dataset.cta];
+    runDealCta(a, a.signals.find((x) => x.type === b.dataset.sig), b);
+  }));
+  $$('[data-move]').forEach((sel) => sel.addEventListener('change', () => {
+    const a = byId[sel.dataset.move];
+    const to = sel.value;
+    sel.value = a.deal.stage; // stays put until the move succeeds
+    moveDeal(a, to);
+  }));
+  bindBoardDrag(byId);
+
+  // Deep links from Good morning: #/pipeline?do=followup&deal=lakeview
+  const target = byId[query.get('deal')];
+  const act = query.get('do');
+  if (target && act) {
+    history.replaceState(null, '', '#/pipeline');
+    const sig = { followup: 'silent', closedate: 'overdue', details: 'details' }[act];
+    if (act === 'stage') moveDeal(target, query.get('to'));
+    else if (sig && target.signals.some((x) => x.type === sig)) runDealCta(target, target.signals.find((x) => x.type === sig));
+  }
+}
+
+function bindBoardDrag(byId) {
+  const board = $('#board');
+  if (!board) return;
+  const closed = $('#drop-closed');
+  let dragging = null;
+  $$('.deal[draggable]', board).forEach((card) => {
+    card.addEventListener('dragstart', (e) => {
+      dragging = card.dataset.deal;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', dragging);
+      card.classList.add('dragging');
+      closed.hidden = false;
+    });
+    card.addEventListener('dragend', () => { card.classList.remove('dragging'); closed.hidden = true; $$('.drop-on').forEach((x) => x.classList.remove('drop-on')); dragging = null; });
+    card.addEventListener('click', (e) => { if (!e.target.closest('a, button')) location.hash = `#/accounts/${card.dataset.deal}`; });
+    card.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target === card) location.hash = `#/accounts/${card.dataset.deal}`; });
+  });
+  $$('[data-drop]').forEach((zone) => {
+    zone.addEventListener('dragover', (e) => { if (!dragging) return; e.preventDefault(); zone.classList.add('drop-on'); });
+    zone.addEventListener('dragleave', (e) => { if (!zone.contains(e.relatedTarget)) zone.classList.remove('drop-on'); });
+    zone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      zone.classList.remove('drop-on');
+      const a = byId[e.dataTransfer.getData('text/plain') || dragging];
+      // Open the pop-up after the drag has fully ended
+      if (a && zone.dataset.drop !== a.deal.stage) setTimeout(() => moveDeal(a, zone.dataset.drop), 0);
+    });
+  });
 }
 
 // ---------- accounts ----------
@@ -632,26 +926,7 @@ async function renderAccount(id, query = new URLSearchParams()) {
   bindCsActions(view);
 
   $$('.stage').forEach((b) => b.addEventListener('click', () => {
-    if (b.classList.contains('current')) return;
-    const won = b.dataset.stage === 'closedwon';
-    if (b.dataset.stage === 'closedlost') {
-      confirmDialog({ title: `Mark ${a.name} as lost?`, body: '<p class="muted">The deal moves to Closed lost in HubSpot. You can move it back later.</p>', confirmLabel: 'Mark as lost', danger: true })
-        .then((ok) => ok && run(b, async () => { await api(`/api/accounts/${id}/deal-stage`, { method: 'POST', body: { stage: 'closedlost' } }); route({ keepScroll: true }); }));
-      return;
-    }
-    const go = () => run(b, async () => {
-      await api(`/api/accounts/${id}/deal-stage`, { method: 'POST', body: { stage: b.dataset.stage } });
-      route({ keepScroll: true });
-    });
-    if (!won) return go();
-    openModal(`<h2>Close ${esc(a.name)} as won?</h2>
-      <p class="muted" style="margin-bottom:10px">This will run the onboarding automation:</p>
-      <ul class="small" style="margin:0 0 12px;padding-left:18px;display:flex;flex-direction:column;gap:4px">
-        <li>HubSpot deal → <b>Closed won</b></li>
-        <li>Slack: announce in <span class="mono">#deals</span>, create <span class="mono">#onb-${esc(a.id)}</span> with the checklist</li>
-        <li>Jira: onboarding epic in <span class="mono">ONB</span></li>
-        <li>Snowflake: log events for reporting</li>
-      </ul>`, 'Close won', () => go());
+    if (!b.classList.contains('current')) moveDeal(a, b.dataset.stage);
   }));
 
   $('#discount')?.addEventListener('click', () => openModal(`
@@ -1528,7 +1803,7 @@ async function route({ keepScroll = false } = {}) {
     else if (section === 'approvals') await renderApprovals();
     else if (section === 'log') await renderLog(query);
     else if (section === 'connections') renderConnections();
-    else if (section === 'pipeline') await renderPipeline();
+    else if (section === 'pipeline') await renderPipeline(query);
     else await renderHome();
   } catch (err) {
     view.innerHTML = `<div class="card empty-state"><h2>Couldn't load this page</h2><p class="muted">${esc(err.message)}</p><button class="btn" onclick="location.reload()">Try again</button></div>`;

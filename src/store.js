@@ -45,11 +45,71 @@ export const CLOSE_REASONS = [
 // People the hub notifies but who don't log in to the demo.
 export const PEOPLE = {
   vpSupport: { name: 'Moshe L.', title: 'VP Support', slackId: 'U04MOSHEL' },
+  solutionsEngineers: [
+    { name: 'Yael M.', title: 'Solutions Engineer', slackId: 'U04YAELM' },
+    { name: 'Omer T.', title: 'Solutions Engineer', slackId: 'U04OMERT' },
+  ],
 };
 
+// ---------------------------------------------------------------- sales
+
+export const MODULES = ['P2P ordering', 'AP automation (AI invoices)', 'Inventory & par levels', 'Recipe costing', 'ERP integration'];
+export const ERPS = ['NetSuite', 'Sage Intacct', 'QuickBooks', 'Oracle', 'Microsoft Dynamics', 'None / spreadsheets'];
+export const LOST_REASONS = ['Price', 'Went with a competitor', 'No decision / timing', 'Missing feature', 'Other'];
+
+// Fields a deal needs before it can enter a stage. `hs` is the HubSpot deal property it's written to.
+export const STAGE_GATES = {
+  qualifiedtobuy: {
+    title: 'Qualify the deal', why: 'So everyone knows why they buy and who decides.',
+    fields: [
+      { id: 'pain', label: 'Main pain', type: 'textarea', hs: 'reeco_pain', placeholder: 'What hurts today, in their words' },
+      { id: 'properties', label: 'Properties in scope', type: 'number', hs: 'reeco_properties' },
+      { id: 'erp', label: 'ERP / accounting system', type: 'select', options: ERPS, hs: 'reeco_erp' },
+      { id: 'decisionMaker', label: 'Decision maker', type: 'text', hs: 'reeco_decision_maker', placeholder: 'Name, title' },
+    ],
+  },
+  presentationscheduled: {
+    title: 'Set up the demo', why: "It's time to loop in a Solutions Engineer. They get these details in Slack.",
+    fields: [
+      { id: 'demoDate', label: 'Demo date & time', type: 'datetime-local', hs: 'reeco_demo_date' },
+      { id: 'se', label: 'Solutions Engineer', type: 'select', options: PEOPLE.solutionsEngineers.map((p) => p.name), hs: 'reeco_solutions_engineer' },
+      { id: 'useCases', label: 'What to show', type: 'multi', options: MODULES, hs: 'reeco_demo_use_cases' },
+      { id: 'attendees', label: 'Who will attend', type: 'text', hs: 'reeco_demo_attendees', placeholder: 'Names and roles' },
+    ],
+  },
+  decisionmakerboughtin: {
+    title: 'Confirm the champion', why: 'A named champion and an agreed business value keep the deal moving.',
+    fields: [
+      { id: 'champion', label: 'Champion', type: 'text', hs: 'reeco_champion', placeholder: 'Name, title' },
+      { id: 'businessValue', label: 'Business value ($ per year)', type: 'number', hs: 'reeco_business_value', hint: 'The savings the customer agreed to, e.g. food cost and AP hours' },
+    ],
+  },
+  contractsent: {
+    title: 'Send the contract', why: 'The signer and legal contact up front, so nothing waits on email ping-pong.',
+    fields: [
+      { id: 'signer', label: 'Signer', type: 'text', hs: 'reeco_signer', placeholder: 'Name, title' },
+      { id: 'closeDate', label: 'Target close date', type: 'date', hs: 'closedate' },
+      { id: 'legalContact', label: 'Legal contact', type: 'text', hs: 'reeco_legal_contact', placeholder: 'Name or email' },
+    ],
+  },
+  closedlost: {
+    title: 'Why was it lost?', why: 'Loss reasons feed the win/loss report in Snowflake.',
+    fields: [
+      { id: 'lostReason', label: 'Reason', type: 'select', options: LOST_REASONS, hs: 'closed_lost_reason' },
+      { id: 'competitor', label: 'Competitor', type: 'text', hs: 'reeco_competitor', requiredIf: ['lostReason', 'Went with a competitor'] },
+    ],
+  },
+};
+
+// Days a deal can sit in a stage before it counts as stuck.
+export const STAGE_DAYS = { appointmentscheduled: 14, qualifiedtobuy: 14, presentationscheduled: 10, decisionmakerboughtin: 14, contractsent: 10 };
+export const SILENT_DAYS = { flag: 7, high: 14 };
+
 export const USERS = [
-  { id: 'maya', name: 'Maya K.', role: 'Account Executive', team: 'sales' },
-  { id: 'eitan', name: 'Eitan B.', role: 'Sales Manager', team: 'sales', approver: true },
+  { id: 'maya', name: 'Maya K.', role: 'Account Executive', team: 'sales', slackId: 'U04MAYAK' },
+  { id: 'noa', name: 'Noa R.', role: 'Account Executive', team: 'sales', slackId: 'U04NOAR' },
+  { id: 'daniel', name: 'Daniel P.', role: 'Account Executive', team: 'sales', slackId: 'U04DANIELP' },
+  { id: 'eitan', name: 'Eitan B.', role: 'Sales Manager', team: 'sales', approver: true, slackId: 'U04EITANB' },
   { id: 'ron', name: 'Ron A.', role: 'Support', team: 'support', intercomAdminId: '5823101' },
   { id: 'tal', name: 'Tal G.', role: 'Support', team: 'support', intercomAdminId: '5823114' },
   { id: 'dana', name: 'Dana S.', role: 'Customer Success', team: 'cs', slackId: 'U04DANAS' },
@@ -241,6 +301,104 @@ function seedApprovals() {
   ];
 }
 
+// Deals the team won before, for "a colleague won a similar deal" suggestions (HubSpot closed-won history).
+function seedWonDeals() {
+  return [
+    { id: 'won_seabright', account: 'Seabright Collection', owner: 'Noa R.', segment: 'Enterprise', properties: 18, erp: 'NetSuite', modules: ['P2P ordering', 'AP automation (AI invoices)', 'ERP integration'], amount: 228000, closedAt: ago(24 * 140),
+      value: '$610K a year: 3.1% lower food cost, and AP saves 120 hours a month', how: 'Pilot at 2 properties in 30 days; the CFO saw the price-variance report in week 2' },
+    { id: 'won_granite', account: 'Granite Peak Lodges', owner: 'Noa R.', segment: 'Mid-market', properties: 10, erp: 'Sage Intacct', modules: ['P2P ordering', 'Inventory & par levels'], amount: 68000, closedAt: ago(24 * 95),
+      value: '$190K a year: food cost down 2.4% with par levels and price alerts', how: 'Demoed on their own invoices; the F&B director became the champion' },
+    { id: 'won_juniper', account: 'Juniper & Vine', owner: 'Daniel P.', segment: 'Independent', properties: 1, erp: 'QuickBooks', modules: ['P2P ordering'], amount: 8400, closedAt: ago(24 * 60),
+      value: '$22K a year: 6 hours a week back for the GM', how: 'Same-week trial; the GM approved on the spot' },
+    { id: 'won_cedar', account: 'Cedar Row Hotels', owner: 'Daniel P.', segment: 'Mid-market', properties: 7, erp: 'QuickBooks', modules: ['P2P ordering', 'AP automation (AI invoices)'], amount: 44000, closedAt: ago(24 * 120),
+      value: '$120K a year: invoices processed 4× faster', how: 'Controller-led; an ROI sheet went out the day after the demo' },
+    { id: 'won_atlas', account: 'Atlas Harbor Resorts', owner: 'Eitan B.', segment: 'Enterprise', properties: 20, erp: 'NetSuite', modules: ['P2P ordering', 'AP automation (AI invoices)', 'Inventory & par levels'], amount: 265000, closedAt: ago(24 * 200),
+      value: '$780K a year across procurement and AP', how: 'Exec sponsor dinner, then a reference call with Seabright' },
+    { id: 'won_sable', account: 'Sable & Pine Resorts', owner: 'Maya K.', segment: 'Mid-market', properties: 6, erp: 'Sage Intacct', modules: ['P2P ordering', 'AP automation (AI invoices)'], amount: 54000, closedAt: ago(24 * 12),
+      value: '$150K a year: invoice approvals per property', how: 'Controller-led, 10% discount for a 2-year term' },
+  ];
+}
+
+// Open deals: HubSpot fields, stage history and the email / meeting timeline.
+const act = (type, dir, days, subject) => ({ type, dir, at: ago(24 * days), subject });
+const DEAL_EXTRAS = {
+  harborline: {
+    closeDate: inDays(9), stageEnteredAt: ago(24 * 6), modules: ['P2P ordering', 'AP automation (AI invoices)', 'ERP integration'],
+    fields: { pain: 'AP keys in 9,000 invoices a month by hand; no price visibility across 14 properties', properties: 14, erp: 'NetSuite', decisionMaker: 'David Harlow, CFO',
+      demoDate: ago(24 * 30).slice(0, 16), se: 'Yael M.', useCases: ['P2P ordering', 'AP automation (AI invoices)'], attendees: 'Laura Chen, AP lead, 3 GMs',
+      champion: 'Laura Chen, VP Procurement', businessValue: 420000, signer: 'David Harlow, CFO', legalContact: 'legal@harborlinehotels.com' },
+    activities: [act('email', 'in', 2, 'Re: Order form: legal redlines'), act('email', 'out', 3, 'Order form: Harborline'), act('meeting', 'in', 9, 'Commercials review')],
+  },
+  'olive-court': {
+    closeDate: inDays(20), stageEnteredAt: ago(24 * 12), modules: ['P2P ordering'],
+    fields: { pain: 'Orders from 12 vendors by email and spreadsheets', properties: 1, erp: 'QuickBooks', decisionMaker: 'Marco Rossi, GM' },
+    activities: [act('email', 'out', 4, 'Following up on pricing'), act('email', 'in', 9, 'Re: Reeco for The Olive Court'), act('meeting', 'in', 13, 'Intro call')],
+  },
+  northgate: {
+    closeDate: inDays(45), stageEnteredAt: ago(24 * 4), modules: ['P2P ordering', 'Inventory & par levels'],
+    fields: { pain: 'Food cost up 4% this year; no par levels, over-ordering at every outlet', properties: 11, erp: 'Sage Intacct', decisionMaker: 'Tom Becker, Director of F&B' },
+    activities: [act('email', 'in', 1, 'Re: Next steps'), act('meeting', 'in', 4, 'Discovery with F&B team')],
+  },
+  meridian: {
+    closeDate: inDays(55), stageEnteredAt: ago(24 * 8), modules: ['Inventory & par levels'],
+    fields: { pain: 'Wants inventory on the platform before renewal', properties: 22, erp: 'NetSuite', decisionMaker: 'Greg Walsh, CFO',
+      demoDate: ago(24 * 20).slice(0, 16), se: 'Omer T.', useCases: ['Inventory & par levels'], attendees: 'Greg Walsh, 4 F&B directors', champion: 'Greg Walsh, CFO', businessValue: 380000 },
+    activities: [act('email', 'in', 3, 'Re: Renewal + inventory proposal'), act('meeting', 'in', 8, 'Renewal review')],
+  },
+  'coastal-keys': {
+    closeDate: inDays(30), stageEnteredAt: ago(24 * 18), modules: ['Recipe costing'],
+    fields: { properties: 9, erp: 'QuickBooks' },
+    activities: [act('email', 'in', 5, 'Re: Recipe costing add-on'), act('email', 'out', 6, 'Recipe costing add-on')],
+  },
+};
+
+function seedProspects() {
+  const prospect = (x) => ({ status: 'Prospect', csm: 'Dana S.', health: null, usage: null, onboarding: null, tickets: [], conversations: [], notes: [], ...x });
+  return [
+    prospect({
+      id: 'lakeview', name: 'Lakeview Lodges', domain: 'lakeviewlodges.com', segment: 'Mid-market', properties: 8, region: 'Great Lakes', owner: 'Maya K.', hubspotCompanyId: '9120034720',
+      contact: { name: 'Hannah Moore', role: 'Controller', email: 'hannah@lakeviewlodges.com' },
+      deal: { id: '18840590', name: 'Lakeview: P2P + AP automation', amount: 48000, stage: 'qualifiedtobuy', discountPct: 0,
+        closeDate: inDays(-4), stageEnteredAt: ago(24 * 21), modules: ['P2P ordering', 'AP automation (AI invoices)'],
+        fields: { pain: 'Month-end close takes 12 days because of paper invoices', properties: 8, erp: 'QuickBooks', decisionMaker: 'Hannah Moore, Controller' },
+        activities: [act('email', 'out', 10, 'Checking in'), act('email', 'in', 16, 'Re: Pricing for 8 lodges'), act('meeting', 'in', 22, 'Discovery')] },
+    }),
+    prospect({
+      id: 'copper-kettle', name: 'The Copper Kettle Inn', domain: 'copperkettleinn.com', segment: 'Independent', properties: 1, region: 'New England', owner: 'Maya K.', hubspotCompanyId: '9120034733',
+      contact: { name: 'Sam Price', role: 'Owner', email: 'sam@copperkettleinn.com' },
+      deal: { id: '18840602', name: 'Copper Kettle: single property', amount: 7200, stage: 'appointmentscheduled', discountPct: 0,
+        closeDate: inDays(40), stageEnteredAt: ago(24 * 2), modules: ['P2P ordering'], fields: {},
+        activities: [act('email', 'in', 1, 'Demo request from reeco.com')] },
+    }),
+    prospect({
+      id: 'pacific-crest', name: 'Pacific Crest Hotels', domain: 'pacificcresthotels.com', segment: 'Enterprise', properties: 22, region: 'US West', owner: 'Noa R.', hubspotCompanyId: '9120034745',
+      contact: { name: 'Julia Park', role: 'SVP Operations', email: 'julia.park@pacificcresthotels.com' },
+      deal: { id: '18840611', name: 'Pacific Crest: 22-property rollout', amount: 310000, stage: 'appointmentscheduled', discountPct: 0,
+        closeDate: inDays(90), stageEnteredAt: ago(24 * 5), modules: ['P2P ordering', 'AP automation (AI invoices)', 'ERP integration'], fields: { properties: 22, erp: 'NetSuite' },
+        activities: [act('meeting', 'in', 5, 'Intro with SVP Operations')] },
+    }),
+    prospect({
+      id: 'riverstone', name: 'Riverstone Hospitality Group', domain: 'riverstonehg.com', segment: 'Mid-market', properties: 9, region: 'Southeast', owner: 'Daniel P.', hubspotCompanyId: '9120034759',
+      contact: { name: 'Chris Allen', role: 'CFO', email: 'chris.allen@riverstonehg.com' },
+      deal: { id: '18840624', name: 'Riverstone: AP automation', amount: 81000, stage: 'presentationscheduled', discountPct: 0,
+        closeDate: inDays(35), stageEnteredAt: ago(24 * 3), modules: ['AP automation (AI invoices)', 'ERP integration'],
+        fields: { pain: 'Invoice backlog of 3 weeks at month end', properties: 9, erp: 'Sage Intacct', decisionMaker: 'Chris Allen, CFO',
+          demoDate: inDays(2).slice(0, 16), se: 'Yael M.', useCases: ['AP automation (AI invoices)', 'ERP integration'], attendees: 'Chris Allen, AP manager' },
+        activities: [act('email', 'in', 2, 'Re: Demo on Thursday')] },
+    }),
+    prospect({
+      id: 'summit-harbor', name: 'Summit & Harbor Resorts', domain: 'summitharbor.com', segment: 'Enterprise', properties: 17, region: 'Northeast', owner: 'Noa R.', hubspotCompanyId: '9120034768',
+      contact: { name: 'Mark Ellis', role: 'VP Finance', email: 'mark.ellis@summitharbor.com' },
+      deal: { id: '18840637', name: 'Summit & Harbor: 17 resorts', amount: 204000, stage: 'contractsent', discountPct: 0,
+        closeDate: inDays(-3), stageEnteredAt: ago(24 * 12), modules: ['P2P ordering', 'AP automation (AI invoices)'],
+        fields: { pain: 'No spend visibility across 17 resorts', properties: 17, erp: 'NetSuite', decisionMaker: 'Mark Ellis, VP Finance',
+          demoDate: ago(24 * 40).slice(0, 16), se: 'Omer T.', useCases: ['P2P ordering', 'AP automation (AI invoices)'], attendees: 'Finance and F&B leads',
+          champion: 'Mark Ellis, VP Finance', businessValue: 520000, signer: 'Mark Ellis, VP Finance', legalContact: 'contracts@summitharbor.com' },
+        activities: [act('email', 'out', 5, 'Following up on the order form'), act('email', 'in', 8, 'Re: Order form'), act('email', 'out', 12, 'Order form: Summit & Harbor')] },
+    }),
+  ];
+}
+
 export const FR_STATUSES = [
   { id: 'submitted', label: 'Submitted' },
   { id: 'under_review', label: 'Under review' },
@@ -271,10 +429,16 @@ function seedAnomalies() {
   ];
 }
 
-export const db = { accounts: [], approvals: [], featureRequests: [], anomalies: [] };
+export const db = { accounts: [], approvals: [], featureRequests: [], anomalies: [], wonDeals: [] };
 
 export function reset() {
-  db.accounts = seedAccounts();
+  db.accounts = [...seedAccounts(), ...seedProspects()];
+  for (const a of db.accounts) {
+    Object.assign(a.deal, structuredClone(DEAL_EXTRAS[a.id] ?? {}));
+    a.deal.fields ??= {};
+    a.deal.activities ??= [];
+  }
+  db.wonDeals = seedWonDeals();
   for (const a of db.accounts) {
     for (const c of a.conversations) {
       c.classification = classify(c.messages.filter((m) => m.from === 'customer').map((m) => `${c.subject}. ${m.text}`).join(' '), a);

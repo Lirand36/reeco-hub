@@ -617,3 +617,67 @@ dialog.drawer[open] { animation: slide-in .18s ease-out; }
   .decide { flex-wrap: wrap; }
   .decide .vr { display: none; }
 }
+
+/* ---------- sales: pipeline board, table, next best actions ---------- */
+.board5 { grid-template-columns: repeat(5, minmax(200px, 1fr)); }
+.col-empty { padding: 4px; }
+.col.drop-on { outline: 2px dashed var(--brand); outline-offset: -2px; background: var(--brand-soft); }
+.deal { display: flex; flex-direction: column; gap: 4px; }
+.deal:hover { border-color: var(--border-strong); }
+.deal:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.deal.dragging { opacity: .45; }
+.deal .name { color: var(--text); }
+.deal .name:hover { color: var(--brand-ink); }
+.deal-meta { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); }
+.next-btn { display: block; width: 100%; margin-top: 4px; padding: 6px 8px; border: 0; border-radius: 8px; background: var(--surface-2); text-align: left; font: inherit; font-size: 12.5px; cursor: pointer; color: var(--text); }
+.next-btn:hover:not([disabled]) { background: var(--brand-soft); }
+.next-btn[disabled] { cursor: default; }
+.next-act { font-weight: 500; }
+.next-act.t-bad { color: var(--bad); }
+.next-act.t-warn { color: var(--warn); }
+.next-act.t-idea { color: var(--info); }
+.next-act.t-calm { color: var(--text); }
+.drop-closed { position: sticky; bottom: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; z-index: 5; }
+.dz { padding: 18px; border: 2px dashed var(--border-strong); border-radius: var(--radius); text-align: center; font-weight: 600; background: var(--surface); box-shadow: var(--shadow); }
+.dz.won { color: var(--good); }
+.dz.lost { color: var(--bad); }
+.dz.drop-on.won { background: var(--good-soft); border-color: var(--good); }
+.dz.drop-on.lost { background: var(--bad-soft); border-color: var(--bad); }
+.today { margin-bottom: 16px; }
+.today-row { display: flex; gap: 12px; align-items: center; padding: 12px 18px; border-bottom: 1px solid var(--border); position: relative; }
+.today-row:last-of-type { border-bottom: 0; }
+.today-row::before { content: ''; position: absolute; left: 0; top: 12px; bottom: 12px; width: 3px; border-radius: 0 3px 3px 0; background: var(--edge, transparent); }
+.today-row.t-bad { --edge: var(--bad); }
+.today-row.t-warn { --edge: var(--warn); }
+.today-row.t-idea { --edge: var(--info); }
+.today-ico { font-size: 18px; width: 24px; text-align: center; flex: none; }
+.today-more { margin: 4px 12px 10px; }
+.link-strong { font-weight: 600; }
+.link-strong:hover { color: var(--brand-ink); }
+.pl-table td { vertical-align: top; }
+.pl-table .pl-next { min-width: 260px; max-width: 360px; }
+.pl-table select.input.sm { max-width: 170px; }
+.seg-inline button .ico { width: 14px; height: 14px; }
+/* deal pop-ups */
+dialog:has(.wide-form) { width: min(560px, calc(100vw - 32px)); }
+.gate { border: 0; padding: 0; margin: 0 0 6px; }
+.gate legend { font-weight: 600; font-size: 13px; margin-bottom: 8px; color: var(--brand-ink); }
+.flabel { font-size: 13px; font-weight: 500; }
+.checks { display: flex; flex-wrap: wrap; gap: 6px; }
+.check-pill { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 999px; font-size: 13px; cursor: pointer; }
+.check-pill:has(input:checked) { border-color: var(--brand); background: var(--brand-soft); }
+.check-pill input { accent-color: var(--brand); }
+.input.ro { background: var(--surface-2); color: var(--muted); }
+.form-error { color: var(--bad); font-size: 13px; margin: 4px 0 0; }
+@media (max-width: 760px) {
+  .pl-table thead { display: none; }
+  .pl-table tbody tr { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .pl-table tbody td { display: block; padding: 0; border: 0; min-width: 0; max-width: none; }
+  .pl-table td[data-label="Deal"], .pl-table td[data-label="Next best action"] { grid-column: 1 / -1; }
+  .pl-table td[data-label]:not([data-label="Deal"]):not([data-label="Next best action"])::before { content: attr(data-label); display: block; font-size: 11px; color: var(--muted); }
+  .pl-table td.num-col { text-align: left; }
+  .today-row { flex-wrap: wrap; }
+  .today-row .grow { flex: 1 1 calc(100% - 40px); }
+  .today-row .btn { margin-left: 36px; }
+  .drop-closed { display: none; }
+}
