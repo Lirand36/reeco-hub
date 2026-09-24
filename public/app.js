@@ -402,12 +402,13 @@ const sigChips = (a, { compact = false } = {}) => {
 };
 function signalDialog(a, x) {
   const dlg = $('#modal');
-  dlg.innerHTML = `<form method="dialog">
+  dlg.innerHTML = `<form method="dialog" class="has-x">
+    <button class="icon-close dlg-x" value="cancel" aria-label="Dismiss"><svg class="ico"><use href="#i-x"/></svg></button>
     <div class="muted small">${esc(a.name)} · ${esc(stageName(a.deal.stage))} · ${moneyCompact(a.deal.amount)}</div>
     <h2 style="margin-top:4px"><span aria-hidden="true">${esc(x.icon)}</span> ${esc(x.title)}</h2>
     <p class="small">${esc(x.detail)}</p>
     ${x.done ? `<p class="muted small">${esc(x.done)}.</p>` : ''}
-    <div class="dialog-actions">${x.cta ? `<button class="btn primary" value="go">${esc(x.cta.label)}</button>` : ''}<button class="btn" value="cancel">Close</button></div></form>`;
+    <div class="dialog-actions">${x.cta ? `<button class="btn primary" value="go" autofocus>${esc(x.cta.label)}</button>` : ''}<button class="btn" value="cancel">${x.cta ? 'Not now' : 'Done'}</button></div></form>`;
   $('form', dlg).addEventListener('submit', (e) => {
     if (e.submitter?.value !== 'go') return;
     e.preventDefault();
@@ -1595,7 +1596,7 @@ POST ${esc(origin)}/webhooks/jira       # Jira: issue updated (feature request s
 function openModal(html, submitLabel, onSubmit) {
   const dlg = $('#modal');
   dlg.innerHTML = `<form method="dialog">${html}
-    <div class="dialog-actions">${submitLabel ? `<button class="btn primary" value="ok">${esc(submitLabel)}</button>` : ''}<button class="btn" value="cancel" formnovalidate>${submitLabel ? 'Cancel' : 'Close'}</button></div></form>`;
+    <div class="dialog-actions">${submitLabel ? `<button class="btn primary" value="ok">${esc(submitLabel)}</button>` : ''}<button class="btn" value="cancel" formnovalidate>${submitLabel ? 'Cancel' : 'Done'}</button></div></form>`;
   const form = $('form', dlg);
   form.addEventListener('submit', (e) => {
     if (e.submitter?.value !== 'ok') return;

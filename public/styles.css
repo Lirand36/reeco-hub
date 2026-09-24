@@ -659,6 +659,8 @@ dialog.drawer[open] { animation: slide-in .18s ease-out; }
 .deal .sig-chips { margin-top: 2px; }
 .deal .sig-chip { padding: 2px 7px; }
 /* deal pop-ups */
+dialog form.has-x { position: relative; padding-right: 48px; }
+.dlg-x { position: absolute; top: 12px; right: 12px; }
 dialog:has(.wide-form) { width: min(560px, calc(100vw - 32px)); }
 .gate { border: 0; padding: 0; margin: 0 0 6px; }
 .gate legend { font-weight: 600; font-size: 13px; margin-bottom: 8px; color: var(--brand-ink); }
