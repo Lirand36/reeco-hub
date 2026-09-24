@@ -629,14 +629,7 @@ dialog.drawer[open] { animation: slide-in .18s ease-out; }
 .deal .name { color: var(--text); }
 .deal .name:hover { color: var(--brand-ink); }
 .deal-meta { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); }
-.next-btn { display: block; width: 100%; margin-top: 4px; padding: 6px 8px; border: 0; border-radius: 8px; background: var(--surface-2); text-align: left; font: inherit; font-size: 12.5px; cursor: pointer; color: var(--text); }
-.next-btn:hover:not([disabled]) { background: var(--brand-soft); }
 .next-btn[disabled] { cursor: default; }
-.next-act { font-weight: 500; }
-.next-act.t-bad { color: var(--bad); }
-.next-act.t-warn { color: var(--warn); }
-.next-act.t-idea { color: var(--info); }
-.next-act.t-calm { color: var(--text); }
 .drop-closed { position: sticky; bottom: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; z-index: 5; }
 .dz { padding: 18px; border: 2px dashed var(--border-strong); border-radius: var(--radius); text-align: center; font-weight: 600; background: var(--surface); box-shadow: var(--shadow); }
 .dz.won { color: var(--good); }
@@ -647,24 +640,10 @@ dialog.drawer[open] { animation: slide-in .18s ease-out; }
 .link-strong:hover { color: var(--brand-ink); }
 .pl-table td { vertical-align: middle; }
 .pl-table .pl-next { min-width: 300px; }
-.next-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
-.next-row .sig-chips { margin-top: 0; }
-.next-title { border: 0; background: none; padding: 0; font: inherit; font-size: 13.5px; cursor: pointer; text-align: left; white-space: nowrap; }
-.next-title:hover .next-act { text-decoration: underline; text-underline-offset: 3px; }
 .pl-table select.input.sm { max-width: 170px; }
 .seg-inline button .ico { width: 14px; height: 14px; }
 /* other signals on a deal */
-.sig-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
-.sig-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); font: inherit; font-size: 12px; cursor: pointer; color: var(--muted); }
-.sig-chip:hover { border-color: var(--border-strong); color: var(--text); }
-.sig-chip.t-bad { color: var(--bad); }
-.sig-chip.t-warn { color: var(--warn); }
-.sig-chip.t-idea { color: var(--info); }
-.deal .sig-chips { margin-top: 2px; }
-.deal .sig-chip, .next-row .sig-chip { padding: 2px 7px; }
 /* deal pop-ups */
-dialog form.has-x { position: relative; padding-right: 48px; }
-.dlg-x { position: absolute; top: 12px; right: 12px; }
 dialog:has(.wide-form) { width: min(560px, calc(100vw - 32px)); }
 .gate { border: 0; padding: 0; margin: 0 0 6px; }
 .gate legend { font-weight: 600; font-size: 13px; margin-bottom: 8px; color: var(--brand-ink); }
@@ -686,15 +665,31 @@ dialog:has(.wide-form) { width: min(560px, calc(100vw - 32px)); }
 }
 
 /* line icons for deal signals */
-.next-act { display: inline-flex; align-items: center; gap: 6px; }
-.next-act .ico { width: 15px; height: 15px; flex: none; }
-.sig-chip .ico { width: 13px; height: 13px; }
-.sig-chip { font-weight: 500; }
-.sig-head { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
-.sig-head .ico { width: 20px; height: 20px; }
-.sig-head.t-bad { color: var(--bad); }
-.sig-head.t-warn { color: var(--warn); }
-.sig-head.t-idea { color: var(--info); }
 .gm-ico .ico { width: 17px; height: 17px; color: var(--muted); }
 .gm-action.p-urgent .gm-ico .ico { color: var(--bad); }
 .gm-action.p-high .gm-ico .ico { color: var(--warn); }
+
+/* deal status (text) and actions (buttons) */
+.status-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; }
+.status-main { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; font-size: 13.5px; white-space: nowrap; }
+.status-main .ico { width: 15px; height: 15px; }
+.sig-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); white-space: nowrap; cursor: default; }
+.sig-tag .ico { width: 13px; height: 13px; }
+.status-main.t-bad, .sig-tag.t-bad { color: var(--bad); }
+.status-main.t-warn, .sig-tag.t-warn { color: var(--warn); }
+.status-main.t-idea, .sig-tag.t-idea { color: var(--info); }
+.acts { display: flex; align-items: center; gap: 6px; flex: none; }
+.more-btn { position: relative; padding-left: 8px; padding-right: 8px; }
+.more-btn .ico { width: 16px; height: 16px; }
+.more-btn[aria-expanded="true"] { background: var(--surface-2); }
+.next-row { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; }
+.deal .status-line { margin-top: 4px; gap: 3px 8px; }
+.deal .acts { margin-top: 6px; }
+.act-menu { width: 300px; }
+.act-item { align-items: flex-start; }
+.act-item .ico { margin-top: 2px; width: 16px; height: 16px; }
+.act-item .ico.t-bad { color: var(--bad); }
+.act-item .ico.t-warn { color: var(--warn); }
+.act-item .ico.t-idea { color: var(--info); }
+.act-label { display: block; font-weight: 500; }
+.act-why { display: block; }
