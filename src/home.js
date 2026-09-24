@@ -99,7 +99,7 @@ function dealAction(a, x, { team = false } = {}) {
   }[x.cta.kind]();
   return {
     id: `deal-${a.id}-${x.type}`, dealId: a.id, priority: x.priority, icon: x.icon, sort: -a.deal.amount / 1e6,
-    title: `${a.name}: ${x.title}`, badge: a.segment === 'Enterprise' ? 'Enterprise' : null,
+    title: `${a.name} · ${x.title}`, badge: a.segment === 'Enterprise' ? 'Enterprise' : null,
     detail: x.detail,
     tags: [{ text: stageName(a.deal.stage), tone: 'brand' }, { text: `${moneyK(a.deal.amount)} ARR`, tone: '' }, team ? { text: a.owner, tone: '' } : null].filter(Boolean),
     cta: team ? link('Open pipeline', '#/pipeline') : cta,

@@ -398,7 +398,7 @@ const nextLine = (x) => (x ? `<span class="next-act t-${signalTone(x)}"><span ar
 const otherSignals = (a) => a.signals.filter((x) => x !== a.next && x.type !== 'next' && !(a.next && x.type === a.next.type));
 const sigChips = (a, { compact = false } = {}) => {
   const rest = otherSignals(a);
-  return rest.length ? `<div class="sig-chips">${rest.map((x) => `<button class="sig-chip t-${signalTone(x)}" data-sig-open="${esc(a.id)}" data-sig="${esc(x.type)}" title="${esc(x.title)}" aria-label="${esc(x.title)}"><span aria-hidden="true">${esc(x.icon)}</span>${compact ? '' : ` ${esc(x.title)}`}</button>`).join('')}</div>` : '';
+  return rest.length ? `<div class="sig-chips">${rest.map((x) => `<button class="sig-chip t-${signalTone(x)}" data-sig-open="${esc(a.id)}" data-sig="${esc(x.type)}" title="${esc(`${x.title}: ${x.detail}`)}" aria-label="${esc(x.title)}"><span aria-hidden="true">${esc(x.icon)}</span>${compact ? '' : ` ${esc(x.title)}`}</button>`).join('')}</div>` : '';
 };
 function signalDialog(a, x) {
   const dlg = $('#modal');
@@ -417,7 +417,7 @@ function signalDialog(a, x) {
   });
   dlg.showModal();
 }
-const ctaBtn = (a, x, primary) => (x?.cta ? `<button class="btn sm ${primary ? 'primary' : ''}" data-cta="${esc(a.id)}" data-sig="${esc(x.type)}">${esc(x.cta.label)}</button>` : x?.done ? `<span class="muted xs">${esc(x.done)}</span>` : '');
+const ctaBtn = (a, x, primary) => (x?.cta ? `<button class="btn sm ${primary ? 'primary' : ''}" data-cta="${esc(a.id)}" data-sig="${esc(x.type)}" title="${esc(x.detail)}">${esc(x.cta.label)}</button>` : x?.done ? `<span class="muted xs">${esc(x.done)}</span>` : '');
 
 const PL_COLS = [
   { id: 'deal', label: 'Deal', key: (a) => a.name.toLowerCase() },
@@ -501,7 +501,11 @@ async function renderPipeline(query = new URLSearchParams()) {
             <td data-label="Close date" class="small">${closeCell(a)}</td>
             ${team ? `<td data-label="Owner" class="small">${esc(a.owner)}</td>` : ''}
             <td data-label="Last reply" class="small">${replyCell(a)}</td>
-            <td data-label="Next best action" class="pl-next">${a.next ? `<div>${nextLine(a.next)}</div><div class="muted xs">${esc(a.next.detail)}</div><div style="margin-top:6px">${ctaBtn(a, a.next, a.next.priority === 'high')}</div>${sigChips(a)}` : ''}</td>
+            <td data-label="Next best action" class="pl-next">${a.next ? `<div class="next-row">
+              <button class="next-title" data-sig-open="${esc(a.id)}" data-sig="${esc(a.next.type)}" title="${esc(a.next.detail)}">${nextLine(a.next)}</button>
+              ${ctaBtn(a, a.next, a.next.priority === 'high')}
+              ${sigChips(a, { compact: true })}
+            </div>` : ''}</td>
           </tr>`).join('') || `<tr><td colspan="${cols.length}" class="empty">No open deals.</td></tr>`}</tbody>
       </table>
     </div>`}`;
