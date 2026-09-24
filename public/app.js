@@ -216,7 +216,7 @@ async function renderHome() {
     <div class="card">
       ${d.actions.map((a) => `
         <div class="gm-action p-${a.priority}">
-          <span class="gm-ico" aria-hidden="true">${esc(a.icon)}</span>
+          <span class="gm-ico" aria-hidden="true">${a.icon?.startsWith('i-') ? `<svg class="ico"><use href="#${esc(a.icon)}"/></svg>` : esc(a.icon)}</span>
           <div class="grow">
             <div class="gm-title">${esc(a.title)} ${a.badge ? segBadge(a.badge) : ''}</div>
             <div class="muted small">${esc(a.detail)}</div>
@@ -393,19 +393,20 @@ function replyCell(a) {
   return `<span class="${tone}">${d ? `${d}d ago` : 'today'}</span>`;
 }
 const signalTone = (x) => (x.priority === 'high' || x.priority === 'urgent' ? 'bad' : x.type === 'similar' ? 'idea' : x.priority === 'normal' ? 'warn' : 'calm');
-const nextLine = (x) => (x ? `<span class="next-act t-${signalTone(x)}"><span aria-hidden="true">${esc(x.icon)}</span> ${esc(x.title)}</span>` : '');
+const sigIcon = (x) => `<svg class="ico" aria-hidden="true"><use href="#${esc(x.icon)}"/></svg>`;
+const nextLine = (x) => (x ? `<span class="next-act t-${signalTone(x)}">${sigIcon(x)}${esc(x.title)}</span>` : '');
 // The deal's other signals, as small chips under the next action; a click shows the detail and its button.
 const otherSignals = (a) => a.signals.filter((x) => x !== a.next && x.type !== 'next' && !(a.next && x.type === a.next.type));
-const sigChips = (a, { compact = false } = {}) => {
+const sigChips = (a) => {
   const rest = otherSignals(a);
-  return rest.length ? `<div class="sig-chips">${rest.map((x) => `<button class="sig-chip t-${signalTone(x)}" data-sig-open="${esc(a.id)}" data-sig="${esc(x.type)}" title="${esc(`${x.title}: ${x.detail}`)}" aria-label="${esc(x.title)}"><span aria-hidden="true">${esc(x.icon)}</span>${compact ? '' : ` ${esc(x.title)}`}</button>`).join('')}</div>` : '';
+  return rest.length ? `<div class="sig-chips">${rest.map((x) => `<button class="sig-chip t-${signalTone(x)}" data-sig-open="${esc(a.id)}" data-sig="${esc(x.type)}" title="${esc(`${x.title}: ${x.detail}`)}" aria-label="${esc(x.title)}">${sigIcon(x)}${esc(x.tag)}</button>`).join('')}</div>` : '';
 };
 function signalDialog(a, x) {
   const dlg = $('#modal');
   dlg.innerHTML = `<form method="dialog" class="has-x">
     <button class="icon-close dlg-x" value="cancel" aria-label="Dismiss"><svg class="ico"><use href="#i-x"/></svg></button>
     <div class="muted small">${esc(a.name)} · ${esc(stageName(a.deal.stage))} · ${moneyCompact(a.deal.amount)}</div>
-    <h2 style="margin-top:4px"><span aria-hidden="true">${esc(x.icon)}</span> ${esc(x.title)}</h2>
+    <h2 class="sig-head t-${signalTone(x)}">${sigIcon(x)}${esc(x.title)}</h2>
     <p class="small">${esc(x.detail)}</p>
     ${x.done ? `<p class="muted small">${esc(x.done)}.</p>` : ''}
     <div class="dialog-actions">${x.cta ? `<button class="btn primary" value="go" autofocus>${esc(x.cta.label)}</button>` : ''}<button class="btn" value="cancel">${x.cta ? 'Not now' : 'Done'}</button></div></form>`;
@@ -477,7 +478,7 @@ async function renderPipeline(query = new URLSearchParams()) {
               <div class="muted xs">${moneyCompact(a.deal.amount)} ARR · ${a.properties} ${a.properties === 1 ? 'property' : 'properties'}${team ? ` · ${esc(a.owner)}` : ''}</div>
               <div class="xs deal-meta"><span>${a.deal.closeDate ? `Closes ${closeCell(a)}` : ''}</span><span>Reply ${replyCell(a)}</span></div>
               ${a.next ? `<button class="next-btn" data-cta="${esc(a.id)}" data-sig="${esc(a.next.type)}" ${a.next.cta ? '' : 'disabled'} title="${esc(a.next.detail)}">${nextLine(a.next)}</button>` : ''}
-              ${sigChips(a, { compact: true })}
+              ${sigChips(a)}
             </article>`).join('') || '<div class="muted xs col-empty">No deals</div>'}
         </div>`;
       }).join('')}
@@ -504,7 +505,7 @@ async function renderPipeline(query = new URLSearchParams()) {
             <td data-label="Next best action" class="pl-next">${a.next ? `<div class="next-row">
               <button class="next-title" data-sig-open="${esc(a.id)}" data-sig="${esc(a.next.type)}" title="${esc(a.next.detail)}">${nextLine(a.next)}</button>
               ${ctaBtn(a, a.next, a.next.priority === 'high')}
-              ${sigChips(a, { compact: true })}
+              ${sigChips(a)}
             </div>` : ''}</td>
           </tr>`).join('') || `<tr><td colspan="${cols.length}" class="empty">No open deals.</td></tr>`}</tbody>
       </table>
