@@ -183,7 +183,7 @@ function manager(user) {
     actions.push({
       id: `risk-${a.id}`, priority: 'normal', icon: 'i-alert', sort: 5,
       title: `${a.name} renewal at risk (${moneyK(a.deal.amount)})`,
-      detail: `Health ${a.health}. AE ${a.owner}, CSM ${a.csm}.`,
+      detail: `Health ${a.health} · AE ${a.owner} · CSM ${a.csm}`,
       tags: [{ text: `Health ${a.health}`, tone: 'bad' }],
       cta: link('Open account', `#/accounts/${a.id}`),
     });
@@ -247,7 +247,7 @@ function cs(user) {
         title: `Support: ${a.name}, “${c.subject}”`, badge: a.segment === 'Enterprise' ? 'Enterprise' : null,
         detail: `${classificationLabel(c.classification)} · owner ${c.assignee ?? 'unassigned'}${c.escalatedTo ? ` · with engineering (${c.escalatedTo})` : ''}.`,
         tags: [{ text: classificationLabel(c.classification), tone: 'info' }],
-        cta: link('View conversation', `#/inbox/${c.id}`),
+        cta: link('View on the account', `#/accounts/${a.id}?tab=support`),
       });
     }
   }
@@ -321,8 +321,54 @@ function cs(user) {
   };
 }
 
+// ---------------------------------------------------------------- admin (RevOps)
+
+// The whole hub at a glance: what's blocked across Sales, Support and Customer Success.
+function admin(user) {
+  const m = manager(user);
+  const actions = [...m.actions];
+  const convs = db.accounts.flatMap((a) => a.conversations.map((c) => ({ a, c })));
+  const snoozed = ({ c }) => c.snoozedUntil && new Date(c.snoozedUntil) > new Date();
+  const waiting = convs.filter((x) => awaitingReply(x.c) && !snoozed(x));
+  const overdue = waiting.filter(({ c }) => c.slaDueAt && minsUntil(c.slaDueAt) < 0);
+  for (const { a, c } of waiting.filter(({ c }) => !c.assignee || (c.slaDueAt && minsUntil(c.slaDueAt) < 0))) {
+    const mins = c.slaDueAt ? minsUntil(c.slaDueAt) : null;
+    actions.push({
+      id: `conv-${c.id}`, priority: mins != null && mins < 0 ? 'high' : 'normal', icon: 'i-inbox', sort: 2,
+      title: `${a.name} · ${c.assignee ? 'reply overdue' : 'nobody assigned'}`, badge: a.segment === 'Enterprise' ? 'Enterprise' : null,
+      detail: `“${c.subject}”. ${c.assignee ? `${c.assignee} owns it; the reply is overdue.` : 'Waiting in the Support queue.'}`,
+      tags: [{ text: 'Support', tone: 'info' }, mins != null ? { text: mins < 0 ? `Overdue ${fmtMins(-mins)}` : `Due in ${fmtMins(mins)}`, tone: mins < 0 ? 'bad' : '' } : null].filter(Boolean),
+      cta: link('Open conversation', `#/inbox/${c.id}`),
+    });
+  }
+  const fresh = db.anomalies.filter((x) => x.status === 'new');
+  for (const an of fresh) {
+    const a = db.accounts.find((x) => x.id === an.accountId);
+    actions.push({
+      id: `an-${an.id}`, priority: 'normal', icon: 'i-trend-down', sort: 4,
+      title: `${a.name} · usage anomaly`, badge: a.segment === 'Enterprise' ? 'Enterprise' : null,
+      detail: `${anomalyText(an)} · CSM ${a.csm}`,
+      tags: [{ text: 'Customer Success', tone: 'info' }],
+      cta: link('Open account', `#/accounts/${a.id}?tab=health`),
+    });
+  }
+  const pending = db.approvals.filter((p) => p.status === 'pending').length;
+  const parts = [pending && plural(pending, 'approval'), waiting.length && `${plural(waiting.length, 'customer')} waiting on Support`, fresh.length && plural(fresh.length, 'usage anomaly', 'usage anomalies')].filter(Boolean);
+  return {
+    summary: parts.length ? `Across the hub: ${parts.join(', ')}.` : 'Everything is moving. Nothing is blocked.',
+    kpis: [
+      { label: 'Team pipeline', value: m.kpis[1].value },
+      { label: 'Pending approvals', value: pending, tone: pending ? 'warn' : '' },
+      { label: 'Overdue replies', value: overdue.length, tone: overdue.length ? 'bad' : '' },
+      { label: 'Usage anomalies', value: fresh.length, tone: fresh.length ? 'warn' : '' },
+    ],
+    actions,
+    footer: link('Open activity log', '#/log'),
+  };
+}
+
 export function goodMorning(user) {
-  const build = user.approver ? manager : { sales, support, cs }[user.team] ?? sales;
+  const build = user.access === 'admin' ? admin : user.approver ? manager : { sales, support, cs }[user.team] ?? sales;
   const data = build(user);
   data.actions.sort((x, y) => RANK[x.priority] - RANK[y.priority] || x.sort - y.sort);
   return { user, ...data, slaHours: CONFIG.slaHours };

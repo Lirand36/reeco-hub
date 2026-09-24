@@ -106,13 +106,14 @@ export const STAGE_DAYS = { appointmentscheduled: 14, qualifiedtobuy: 14, presen
 export const SILENT_DAYS = { flag: 7, high: 14 };
 
 export const USERS = [
-  { id: 'maya', name: 'Maya K.', role: 'Account Executive', team: 'sales', slackId: 'U04MAYAK' },
-  { id: 'noa', name: 'Noa R.', role: 'Account Executive', team: 'sales', slackId: 'U04NOAR' },
-  { id: 'daniel', name: 'Daniel P.', role: 'Account Executive', team: 'sales', slackId: 'U04DANIELP' },
-  { id: 'eitan', name: 'Eitan B.', role: 'Sales Manager', team: 'sales', approver: true, slackId: 'U04EITANB' },
-  { id: 'ron', name: 'Ron A.', role: 'Support', team: 'support', intercomAdminId: '5823101' },
-  { id: 'tal', name: 'Tal G.', role: 'Support', team: 'support', intercomAdminId: '5823114' },
-  { id: 'dana', name: 'Dana S.', role: 'Customer Success', team: 'cs', slackId: 'U04DANAS' },
+  { id: 'maya', name: 'Maya K.', role: 'Account Executive', team: 'sales', access: 'ae', slackId: 'U04MAYAK' },
+  { id: 'noa', name: 'Noa R.', role: 'Account Executive', team: 'sales', access: 'ae', slackId: 'U04NOAR' },
+  { id: 'daniel', name: 'Daniel P.', role: 'Account Executive', team: 'sales', access: 'ae', slackId: 'U04DANIELP' },
+  { id: 'eitan', name: 'Eitan B.', role: 'Sales Manager', team: 'sales', access: 'manager', approver: true, slackId: 'U04EITANB' },
+  { id: 'ron', name: 'Ron A.', role: 'Support', team: 'support', access: 'support', intercomAdminId: '5823101' },
+  { id: 'tal', name: 'Tal G.', role: 'Support', team: 'support', access: 'support', intercomAdminId: '5823114' },
+  { id: 'dana', name: 'Dana S.', role: 'Customer Success', team: 'cs', access: 'cs', slackId: 'U04DANAS' },
+  { id: 'alex', name: 'Alex M.', role: 'Admin (RevOps)', team: 'admin', access: 'admin' },
 ];
 
 // 12 weeks of weekly product usage (oldest → newest), as Snowflake's PRODUCT.WEEKLY_USAGE would return it.

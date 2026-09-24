@@ -32,6 +32,24 @@ const days = (iso) => Math.max(0, Math.round((Date.now() - new Date(iso)) / 8640
 const stageLabel = (id) => state.meta.stages.find((s) => s.id === id)?.label ?? id;
 const src = (sys, text) => `<span class="src ${sys}">${esc(text ?? SYSTEMS[sys].name)}</span>`;
 const user = () => state.meta.users.find((u) => u.id === $('#user').value) ?? state.meta.users[0];
+// Access (the server enforces the same rules; see src/access.js)
+const role = () => state.meta.roles[user().access] ?? state.meta.roles.ae;
+const can = (cap) => role().caps.includes('*') || role().caps.includes(cap);
+const PAGE_CAP = { pipeline: 'pipeline.view', approvals: 'approvals.view', inbox: 'inbox.work', portfolio: 'portfolio.view', onboarding: 'onboarding.edit', requests: 'fr.view', accounts: 'accounts.view', log: 'log.view', connections: 'connections.view' };
+const isAdmin = () => role().caps.includes('*');
+const canSee = (section) => !PAGE_CAP[section] || can(PAGE_CAP[section]);
+// Deals: AEs work their own, managers and admins the team's.
+const canEditDeal = (a) => can('deal.edit') && (can('pipeline.team') || a.owner === user().name);
+
+// The sidebar shows only what the signed-in role can use; empty groups disappear.
+function applyNav() {
+  $$('[data-nav]').forEach((a) => { a.hidden = !canSee(a.dataset.nav); });
+  $$('.nav-label').forEach((label) => {
+    let el = label.nextElementSibling, any = false;
+    while (el && !el.classList.contains('nav-label')) { if (!el.hidden) any = true; el = el.nextElementSibling; }
+    label.hidden = !any;
+  });
+}
 
 const healthBar = (h) => h == null ? '<span class="muted small">n/a</span>' :
   `<div class="health"><div class="bar"><span style="width:${h}%;background:${h >= 75 ? 'var(--good)' : h >= 50 ? 'var(--warn)' : 'var(--bad)'}"></span></div><span class="small num">${h}</span></div>`;
@@ -126,9 +144,11 @@ function connectEvents() {
   es.addEventListener('activity', (e) => {
     const x = JSON.parse(e.data);
     const byOther = x.actor && x.actor !== user().name;
+    // You see what you did, plus what happens in your own area (Support doesn't get deal updates)
+    if (byOther && !role().areas.includes(x.area)) return;
     toast(`<div class="t-body"><span class="t-ico" aria-hidden="true">${icon(x.icon)}</span>
       <div><div>${esc(x.text)}</div>${byOther ? `<div class="muted xs">by ${esc(x.actor)}</div>` : ''}</div></div>
-      <a class="link xs t-more" href="#/log?open=${esc(x.id)}">Details</a>`, { tone: x.tone || 'good', ms: 6000 });
+      ${can('log.view') ? `<a class="link xs t-more" href="#/log?open=${esc(x.id)}">Details</a>` : ''}`, { tone: x.tone || 'good', ms: 6000 });
   });
   es.addEventListener('inbound', (e) => { state.flashId = JSON.parse(e.data).conversation.id; });
   es.addEventListener('changed', () => {
@@ -138,12 +158,13 @@ function connectEvents() {
 }
 
 async function refreshBadges() {
-  const [inbox, approvals] = await Promise.all([api('/api/inbox'), api('/api/approvals')]);
   const set = (id, n) => { const b = $(id); b.hidden = !n; b.textContent = n; };
+  const [inbox, approvals, accounts] = await Promise.all([
+    can('inbox.work') ? api('/api/inbox') : [], can('approvals.view') ? api('/api/approvals') : [], can('portfolio.view') ? api('/api/accounts') : [],
+  ]);
   set('#badge-inbox', inbox.filter((c) => c.state === 'open').length);
   set('#badge-approvals', approvals.filter((p) => p.status === 'pending').length);
-  const accounts = await api('/api/accounts');
-  set('#badge-portfolio', accounts.filter((a) => a.csm === user().name).reduce((n, a) => n + a.anomalies.length, 0));
+  set('#badge-portfolio', accounts.filter((a) => a.csm === user().name || isAdmin()).reduce((n, a) => n + a.anomalies.length, 0));
 }
 
 
@@ -178,11 +199,12 @@ function frStatus(status) {
 
 // Shared by the Feature requests page and the account's Requests tab.
 function frCustomerCell(f, r) {
+  if (f.status === 'shipped' && !r.notified && !can('fr.edit')) return '<span class="muted small">Not told yet</span>';
   if (f.status === 'shipped') return r.notified ? '<span class="chip good">Told</span>' : `<button class="btn sm primary" data-tell="${esc(f.id)}" data-account="${esc(r.accountId)}">Tell the customer</button>`;
   if (f.status === 'declined') return '<span class="muted small">Not planned</span>';
   return '<span class="muted small">Waiting on product</span>';
 }
-const frSimBtn = (f) => (f.next ? `<button class="fr-sim" data-advance="${esc(f.id)}" title="Demo: simulate a Jira update → ${esc(frLabel(f.next))}" aria-label="Simulate Jira update to ${esc(frLabel(f.next))}"><svg class="ico"><use href="#i-arrow"/></svg></button>` : '');
+const frSimBtn = (f) => (f.next && can('fr.edit') ? `<button class="fr-sim" data-advance="${esc(f.id)}" title="Demo: simulate a Jira update → ${esc(frLabel(f.next))}" aria-label="Simulate Jira update to ${esc(frLabel(f.next))}"><svg class="ico"><use href="#i-arrow"/></svg></button>` : '');
 
 // ---------- good morning ----------
 function ctaButton(c, primary) {
@@ -427,7 +449,8 @@ const PL_COLS = [
 async function renderPipeline(query = new URLSearchParams()) {
   const me = user();
   state.plOpen ??= new Set();
-  state.plScope ??= me.approver ? 'team' : 'mine';
+  if (!can('pipeline.team')) state.plScope = 'mine';
+  state.plScope ??= 'team';
   state.plSort ??= { id: 'next', dir: 1 };
   const viewMode = pipelineView();
   const all = await api('/api/pipeline');
@@ -444,10 +467,10 @@ async function renderPipeline(query = new URLSearchParams()) {
     <div class="page-head">
       <div><h1>Pipeline</h1><p class="muted">${team ? 'Open deals across the team' : 'Your open deals'} and what each one needs next. Synced with HubSpot.</p></div>
       <div class="row">
-        <div class="seg seg-inline" role="group" aria-label="Whose deals">
+        ${can('pipeline.team') ? `<div class="seg seg-inline" role="group" aria-label="Whose deals">
           <button class="${!team ? 'sel' : ''}" data-plscope="mine" aria-pressed="${!team}">My deals</button>
           <button class="${team ? 'sel' : ''}" data-plscope="team" aria-pressed="${team}">Team</button>
-        </div>
+        </div>` : ''}
         <div class="seg seg-inline" role="group" aria-label="View">
           <button class="${viewMode === 'board' ? 'sel' : ''}" data-plview="board" aria-pressed="${viewMode === 'board'}"><svg class="ico"><use href="#i-board"/></svg>Board</button>
           <button class="${viewMode === 'table' ? 'sel' : ''}" data-plview="table" aria-pressed="${viewMode === 'table'}"><svg class="ico"><use href="#i-list"/></svg>Table</button>
@@ -714,7 +737,7 @@ function healthPanel(a) {
     <section class="card" style="margin-top:16px">
       <div class="card-head">
         <div><h2>Weekly usage · last 12 weeks</h2><div class="muted small">From Snowflake. An anomaly is last week vs the 4 weeks before: a drop of 30%+ or an error spike.</div></div>
-        <button class="btn sm" data-scan>${icon('i-search')}Check for anomalies</button>
+        ${can('anomalies.edit') ? `<button class="btn sm" data-scan>${icon('i-search')}Check for anomalies</button>` : ''}
       </div>
       <div class="metric-grid">
         ${METRIC_TILES.map(([m, label]) => {
@@ -735,10 +758,13 @@ function healthPanel(a) {
         <div class="list-item">
           <svg class="ico tone-${x.severity}" style="width:18px;height:18px"><use href="#i-alert"/></svg>
           <div class="grow"><div>${esc(x.text)}</div><div class="muted xs">Detected ${rel(x.detectedAt)}${x.reviewedBy ? ` · reviewed by ${esc(x.reviewedBy)}` : ''}</div></div>
-          ${x.status === 'new' ? `<button class="btn sm" data-ack="${esc(x.id)}">Mark reviewed</button>` : '<span class="chip good">Reviewed</span>'}
+          ${x.status === 'new' ? (can('anomalies.edit') ? `<button class="btn sm" data-ack="${esc(x.id)}">Mark reviewed</button>` : '<span class="chip warn">To review</span>') : '<span class="chip good">Reviewed</span>'}
         </div>`).join('') : '<div class="empty">No anomalies. Usage looks normal.</div>'}
     </section>`;
 }
+
+// Conversations open in the Inbox for Support; other roles see them in place.
+const convTag = (c) => (can('inbox.work') ? `a class="list-item link-row" href="#/inbox/${esc(c.id)}"` : 'div class="list-item"');
 
 function supportPanel(a) {
   const open = a.conversationsView.filter((c) => c.state === 'open');
@@ -754,7 +780,7 @@ function supportPanel(a) {
       <section class="card">
         <div class="card-head"><h2>Open conversations</h2>${src('intercom')}</div>
         ${open.map((c) => `
-          <a class="list-item link-row" href="#/inbox/${esc(c.id)}">
+          <${convTag(c)}>
             <div class="grow">
               <div style="font-weight:500">${esc(c.subject)}</div>
               <div class="ii-facts">
@@ -763,11 +789,11 @@ function supportPanel(a) {
                 <div class="fact ${c.assignee ? '' : 'warn'}"><svg class="ico"><use href="#i-user"/></svg><span class="k">Owner:</span>${c.assignee ? esc(c.assignee) : 'Unassigned'}</div>
               </div>
             </div>
-            <svg class="ico muted"><use href="#i-arrow"/></svg>
-          </a>`).join('') || '<div class="empty">No open conversations.</div>'}
+            ${can('inbox.work') ? '<svg class="ico muted"><use href="#i-arrow"/></svg>' : ''}
+          </${convTag(c).split(' ')[0]}>`).join('') || '<div class="empty">No open conversations.</div>'}
         <div class="card-head" style="border-top:1px solid var(--border)"><h2>Past conversations</h2></div>
         ${closed.map((c) => `
-          <a class="list-item link-row" href="#/inbox/${esc(c.id)}"><div class="grow"><div>${esc(c.subject)}</div><div class="muted xs">${esc(c.classificationLabel)} · closed as ${esc(reasonLabel(c.closeReason ?? ''))} · ${rel(c.updatedAt)}</div></div></a>`).join('') || '<div class="empty">None yet.</div>'}
+          <${convTag(c)}><div class="grow"><div>${esc(c.subject)}</div><div class="muted xs">${esc(c.classificationLabel)} · closed as ${esc(reasonLabel(c.closeReason ?? ''))} · ${rel(c.updatedAt)}</div></div></${convTag(c).split(' ')[0]}>`).join('') || '<div class="empty">None yet.</div>'}
       </section>
       <section class="card">
         <div class="card-head"><h2>Engineering tickets</h2>${src('jira')}</div>
@@ -816,7 +842,7 @@ async function renderAccount(id, query = new URLSearchParams()) {
   const a = await api(`/api/accounts/${id}`);
   // Open deals get the same suggested actions as the Pipeline
   const dealOpen = !['closedwon', 'closedlost'].includes(a.deal.stage);
-  const pl = dealOpen ? (await api('/api/pipeline')).find((x) => x.id === id) : null;
+  const pl = dealOpen && canEditDeal(a) ? (await api('/api/pipeline')).find((x) => x.id === id) : null;
   const stages = state.meta.stages;
   const idx = stages.findIndex((s) => s.id === a.deal.stage);
   const pending = a.approvals.find((p) => p.status === 'pending');
@@ -824,8 +850,9 @@ async function renderAccount(id, query = new URLSearchParams()) {
   const steps = state.meta.steps;
   const doneCount = a.onboarding ? steps.filter((s) => a.onboarding.steps[s.id].done).length : 0;
   const net = a.deal.amount * (1 - (a.deal.discountPct || 0) / 100);
-  // CS lands on health; everyone else on the overview. ?tab= deep-links.
-  const tab = query.get('tab') || (user().team === 'cs' && a.status !== 'Prospect' ? 'health' : 'overview');
+  // Each role sees the tabs it needs, in its own order of importance; ?tab= deep-links.
+  const tabs = role().accountTabs.map((t) => ACCOUNT_TABS.find((x) => x.id === t)).filter((t) => !t.live || a.status !== 'Prospect');
+  const tab = tabs.some((t) => t.id === query.get('tab')) ? query.get('tab') : tabs[0].id;
 
   view.innerHTML = `
     <nav class="crumbs" aria-label="Breadcrumb"><a href="#/accounts">Accounts</a><span aria-hidden="true">/</span><span aria-current="page">${esc(a.name)}</span></nav>
@@ -843,12 +870,12 @@ async function renderAccount(id, query = new URLSearchParams()) {
       </div>
       <div class="row">
         <button class="btn" id="add-note">${icon('i-plus')}Note</button>
-        <button class="btn" id="new-ticket">${icon('i-plus')}Jira ticket</button>
+        ${can('tickets.create') ? `<button class="btn" id="new-ticket">${icon('i-plus')}Jira ticket</button>` : ''}
       </div>
     </div>
 
     <div class="tabs" role="tablist" aria-label="Account sections">
-      ${ACCOUNT_TABS.filter((t) => !t.live || a.status !== 'Prospect').map((t) => `<button role="tab" class="tab ${t.id === tab ? 'sel' : ''}" data-acct-tab="${t.id}" aria-selected="${t.id === tab}" aria-controls="panel-${t.id}">${esc(t.label)}${t.count ? ` <span class="num">${t.count(a)}</span>` : ''}</button>`).join('')}
+      ${tabs.map((t) => `<button role="tab" class="tab ${t.id === tab ? 'sel' : ''}" data-acct-tab="${t.id}" aria-selected="${t.id === tab}" aria-controls="panel-${t.id}">${esc(t.label)}${t.count ? ` <span class="num">${t.count(a)}</span>` : ''}</button>`).join('')}
     </div>
 
     <div class="tab-panel" id="panel-health" role="tabpanel" ${tab === 'health' ? '' : 'hidden'}>${a.status === 'Prospect' ? '' : healthPanel(a)}</div>
@@ -859,12 +886,12 @@ async function renderAccount(id, query = new URLSearchParams()) {
       <div class="stack">
         <section class="card">
           <div class="card-head">
-            <div><h2>${esc(a.deal.name)}</h2><div class="muted small">Click a stage to update HubSpot</div></div>
+            <div><h2>${esc(a.deal.name)}</h2><div class="muted small">${canEditDeal(a) ? 'Click a stage to update HubSpot' : `Owned by ${esc(a.owner)} · read-only`}</div></div>
             ${src('hubspot', `Deal ${a.deal.id}`)}
           </div>
           ${pending ? `<div class="banner">${icon('i-clock')}${pending.pct}% discount waiting for manager approval in Slack <span class="mono">#deal-desk</span>. <a class="link" href="#/approvals">View</a></div>` : ''}
           <div class="pipeline">
-            ${stages.map((s, i) => `<button class="stage ${s.id === 'closedlost' ? 'lost' : ''} ${i === idx ? 'current' : i < idx && a.deal.stage !== 'closedlost' ? 'done' : ''}" data-stage="${s.id}">${esc(s.label)}</button>`).join('')}
+            ${stages.map((s, i) => `<button class="stage ${s.id === 'closedlost' ? 'lost' : ''} ${i === idx ? 'current' : i < idx && a.deal.stage !== 'closedlost' ? 'done' : ''}" data-stage="${s.id}" ${canEditDeal(a) ? '' : 'disabled'}>${esc(s.label)}</button>`).join('')}
           </div>
           <div class="deal-foot">
             <div class="row">
@@ -872,7 +899,7 @@ async function renderAccount(id, query = new URLSearchParams()) {
               ${a.deal.discountPct ? `<span class="muted small">list ${money(a.deal.amount)} · −${a.deal.discountPct}%</span>` : ''}
               ${lastDecided && !pending ? `<span class="chip ${lastDecided.status === 'approved' ? 'good' : 'bad'}">${lastDecided.pct}% ${lastDecided.status} by ${esc(lastDecided.decidedBy)}</span>` : ''}
             </div>
-            ${a.deal.stage !== 'closedwon' && !pending ? '<button class="btn sm" id="discount">Request discount</button>' : ''}
+            ${a.deal.stage !== 'closedwon' && !pending && canEditDeal(a) ? '<button class="btn sm" id="discount">Request discount</button>' : ''}
           </div>
           ${pl && suggestions(pl).length ? `<div class="acct-sa"><div class="sa-row-head">Next suggested action${suggestions(pl).length > 1 ? 's' : ''}</div><div class="sa-grid">${suggestions(pl).map((x) => saCard(pl, x)).join('')}</div></div>` : ''}
         </section>
@@ -882,13 +909,13 @@ async function renderAccount(id, query = new URLSearchParams()) {
           <${a.onboarding.completedAt ? 'summary' : 'div'} class="card-head">
             <div><h2>Onboarding · ${doneCount}/${steps.length}</h2>
               <div class="muted small">${a.onboarding.completedAt ? `Completed ${rel(a.onboarding.completedAt)}` : `Day ${days(a.onboarding.startedAt)}`} · Slack <span class="mono">${esc(a.onboarding.slackChannel)}</span> · Jira <span class="mono">${esc(a.onboarding.jiraEpic ?? '')}</span></div></div>
-            ${a.onboarding.completedAt ? `<span class="link small onb-toggle">Show steps</span>` : `<button class="btn sm" id="sync">${icon('i-reset')}Sync from Snowflake</button>`}
+            ${a.onboarding.completedAt ? `<span class="link small onb-toggle">Show steps</span>` : (can('onboarding.edit') ? `<button class="btn sm" id="sync">${icon('i-reset')}Sync from Snowflake</button>` : '')}
           </${a.onboarding.completedAt ? 'summary' : 'div'}>
           <div class="steps">
             ${steps.map((s) => {
               const st = a.onboarding.steps[s.id];
               return `<div class="step ${st.done ? 'done' : ''}">
-                <button class="check ${st.done ? 'on' : ''}" data-step="${s.id}" ${s.auto ? 'disabled' : ''} aria-label="${esc(s.label)}" title="${s.auto ? `Completed automatically: ${esc(s.hint)}` : 'Toggle'}">${st.done ? '✓' : ''}</button>
+                <button class="check ${st.done ? 'on' : ''}" data-step="${s.id}" ${s.auto || !can('onboarding.edit') ? 'disabled' : ''} aria-label="${esc(s.label)}" title="${s.auto ? `Completed automatically: ${esc(s.hint)}` : 'Toggle'}">${st.done ? '✓' : ''}</button>
                 <div class="grow"><span class="label">${esc(s.label)}</span>${st.done ? `<div class="muted xs">${esc(st.by)} · ${rel(st.at)}</div>` : ''}</div>
                 ${s.auto ? `${src('snowflake', 'auto')}` : ''}
               </div>`;
@@ -921,7 +948,7 @@ async function renderAccount(id, query = new URLSearchParams()) {
               <div><div class="muted xs">Vendors connected</div><div class="v num">${compact(a.usage.vendorsConnected)}</div></div>
             </div>
             <div class="spread" style="margin-top:14px"><span class="muted xs">Last active ${rel(a.usage.lastActive)}</span>
-              ${a.onboarding ? '' : `<button class="btn sm" id="sync">${icon('i-reset')}Refresh</button>`}</div>`
+              ${a.onboarding || !can('onboarding.edit') ? '' : `<button class="btn sm" id="sync">${icon('i-reset')}Refresh</button>`}</div>`
           : '<p class="muted small">Prospect: no product usage yet.</p>'}
         </section>
 
@@ -967,7 +994,7 @@ async function renderAccount(id, query = new URLSearchParams()) {
 
   bindReplies(view);
 
-  $('#new-ticket').addEventListener('click', () => openModal(`
+  $('#new-ticket')?.addEventListener('click', () => openModal(`
     <h2>New Jira ticket · ${esc(a.name)}</h2>
     <div class="field"><label for="t-sum">Summary</label><input class="input" id="t-sum" name="summary" required /></div>
     <div class="field"><label for="t-desc">Description</label><textarea class="input" id="t-desc" name="description" rows="3"></textarea></div>
@@ -1486,7 +1513,7 @@ async function renderApprovals() {
       return `<span class="chip ${p.status === 'approved' ? 'good' : 'bad'}">${icon(p.status === 'approved' ? 'i-done' : 'i-x')}${p.status === 'approved' ? 'Approved' : 'Rejected'}</span>
         <div class="muted xs" style="margin-top:4px">by ${esc(p.decidedBy)} ${p.via === 'slack' ? 'in Slack' : 'in the hub'} · ${rel(p.decidedAt)}</div>`;
     }
-    if (me.approver) {
+    if (can('approvals.decide')) {
       return `<div class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn primary sm" data-decide="approved" data-id="${p.id}">Approve</button><button class="btn sm danger" data-decide="rejected" data-id="${p.id}">Reject</button></div>`;
     }
     return `<div class="small">Waiting on ${esc(approver.name)}</div>
@@ -1638,7 +1665,7 @@ function openModal(html, submitLabel, onSubmit) {
 function openTour() {
   openModal(`<h2>Demo guide · 8 minutes</h2>
     <ol class="tour">
-      <li><b>Good morning.</b> <a class="link" href="#/home">Start here</a>: each role lands on its own to-do list with one-click actions. Use <i>View as</i> to switch roles.</li>
+      <li><b>Good morning.</b> <a class="link" href="#/home">Start here</a>: each role lands on its own to-do list with one-click actions. Switch user (bottom-left) to see how each role's workspace changes; <i>Alex (Admin)</i> sees everything, including the Activity log.</li>
       <li><b>Sales: close a deal.</b> <a class="link" href="#/accounts/harborline">Harborline</a> → <i>Closed won</i>. One click updates HubSpot, tells the team in Slack, opens a Jira epic and starts onboarding.</li>
       <li><b>Deal desk.</b> <a class="link" href="#/accounts/northgate">Northgate</a> → <i>Request discount</i> 20%. Then <a class="link" href="#/approvals">Approvals</a> → <i>Simulate Slack click</i>.</li>
       <li><b>Support.</b> As Ron, open the <a class="link" href="#/inbox">Inbox</a>: queues, the <i>Account snapshot</i>, <i>Summarize &amp; draft reply</i>, then <i>Close</i> with a reason.</li>
@@ -1743,9 +1770,9 @@ const PAGES = [
 async function openPalette() {
   const dlg = $('#palette');
   if (dlg.open) return;
-  const [accounts, convs] = await Promise.all([api('/api/accounts'), api('/api/inbox')]);
+  const [accounts, convs] = await Promise.all([api('/api/accounts'), can('inbox.work') ? api('/api/inbox') : []]);
   const items = [
-    ...PAGES.map(([label, href, icon]) => ({ group: 'Pages', label, href, icon, hint: '' })),
+    ...PAGES.filter(([, href]) => canSee(href.split('/')[1])).map(([label, href, icon]) => ({ group: 'Pages', label, href, icon, hint: '' })),
     ...accounts.map((a) => ({ group: 'Accounts', label: a.name, href: `#/accounts/${a.id}`, icon: 'i-building', hint: `${a.status} · ${a.segment}`, q: `${a.domain} ${a.contact?.name ?? ''}` })),
     ...convs.filter((c) => c.state === 'open').map((c) => ({ group: 'Open conversations', label: c.subject, href: `#/inbox/${c.id}`, icon: 'i-inbox', hint: c.account.name, q: c.messages.map((m) => m.author).join(' ') })),
   ];
@@ -1792,6 +1819,7 @@ function onKey(e) {
   if (e.key.toLowerCase() === 'g') { gPending = Date.now(); return; }
   if (Date.now() - gPending < 1200) {
     const dest = { h: '#/home', p: '#/pipeline', i: '#/inbox', o: '#/onboarding', a: '#/accounts', l: '#/log', c: '#/connections', m: '#/portfolio', r: '#/requests' }[e.key.toLowerCase()];
+    if (dest && !canSee(dest.split('/')[1])) { gPending = 0; return; }
     gPending = 0;
     if (dest) { location.hash = dest; return; }
   }
@@ -1812,6 +1840,15 @@ function onKey(e) {
 const TITLES = { home: 'Good morning', pipeline: 'Pipeline', approvals: 'Approvals', inbox: 'Inbox', onboarding: 'Onboarding', portfolio: 'My portfolio', requests: 'Feature requests', accounts: 'Accounts', log: 'Activity log', connections: 'Connections' };
 let lastSection = null;
 
+// A friendly stop for links to areas outside your role.
+function renderNoAccess(section) {
+  view.innerHTML = `<div class="card empty-state no-access">
+    ${icon('i-flag')}
+    <h2>${esc(TITLES[section] ?? 'This page')} isn't part of your workspace</h2>
+    <p class="muted">You're signed in as ${esc(user().name)} (${esc(user().role)}). Ask an admin if you need access.</p>
+    <a class="btn primary" href="#/home">Go to your Good morning</a></div>`;
+}
+
 async function route({ keepScroll = false } = {}) {
   const [path, qs = ''] = (location.hash || '#/home').split('?');
   const [, section = 'home', id] = path.split('/');
@@ -1829,7 +1866,8 @@ async function route({ keepScroll = false } = {}) {
   // Show a skeleton only if loading is noticeable, so fast pages don't flicker.
   const skel = navigated ? setTimeout(() => { view.innerHTML = SKELETON; }, 150) : null;
   try {
-    if (section === 'home') await renderHome();
+    if (!canSee(section)) renderNoAccess(section);
+    else if (section === 'home') await renderHome();
     else if (section === 'accounts' && id) await renderAccount(id, query);
     else if (section === 'accounts') await renderAccounts();
     else if (section === 'inbox') await renderInbox(id);
@@ -1858,8 +1896,14 @@ async function init() {
   const sel = $('#user');
   sel.innerHTML = state.meta.users.map((u) => `<option value="${u.id}">${esc(u.name)} · ${esc(u.role)}</option>`).join('');
   try { const saved = localStorage.getItem('reeco-hub-user'); if (saved && state.meta.users.some((u) => u.id === saved)) sel.value = saved; } catch {}
-  sel.addEventListener('change', () => { try { localStorage.setItem('reeco-hub-user', sel.value); } catch {} renderUserChip(); refreshBadges(); route({ keepScroll: true }); });
+  sel.addEventListener('change', () => {
+    try { localStorage.setItem('reeco-hub-user', sel.value); } catch {}
+    renderUserChip(); applyNav(); refreshBadges();
+    // Switching role: land on their Good morning rather than a page they can't use
+    if (!canSee((location.hash.split('/')[1] ?? 'home').split('?')[0])) location.hash = '#/home'; else route({ keepScroll: true });
+  });
   renderUserChip();
+  applyNav();
   if (!/Mac|iPhone|iPad/.test(navigator.platform)) $('#kbd-k').textContent = 'Ctrl K'; else $('#kbd-k').textContent = '⌘K';
 
   $('#user-btn').addEventListener('click', () => toggleUserMenu());
