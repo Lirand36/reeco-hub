@@ -39,9 +39,10 @@ The same steps, with links, are in the app under the user menu (bottom-left) →
 1. **Close a deal.** Open *Harborline Hotel Group* → click **Closed won**. One click updates HubSpot, announces in `#deals`, creates `#onb-harborline` with the checklist, opens a Jira onboarding epic and logs to Snowflake.
 2. **Deal desk.** *Northgate Inns* → **Request discount** 20% (the approval threshold is 15%). The request goes to `#deal-desk` with Approve/Reject buttons. Approve it from **Approvals**, either as *Eitan B. (Sales Manager)* or with **Simulate Slack click**.
 3. **Support.** Sign in as *Ron A. (Support)* and open **Inbox**.
-   - **Queues:** Mine / Unassigned / Enterprise / Overdue / All open / Snoozed / Closed. **Assign to me**, change owner, or **Snooze** (1h, 4h, tomorrow). A snoozed conversation wakes up when the customer replies. Every change syncs to Intercom.
+   - **Queue:** a table of conversations (customer, subject, classification, reply due, owner, last message), most urgent first and sortable by any column, in tabs: Mine / Unassigned / Enterprise / Overdue / All open / Snoozed / Closed. Click a row, or use `J` / `K` and `Enter`, to open it.
+   - **Conversation:** one conversation at a time, with **Previous / Next** through the queue. **Assign to me**, change owner, or **Snooze** (1h, 4h, tomorrow). A snoozed conversation wakes up when the customer replies. Closing or snoozing moves on to the next one. Every change syncs to Intercom.
    - **Classification:** every conversation is classified when it arrives: How-to, Reeco technical issue, Integration (naming the tool: NetSuite, Sage Intacct, QuickBooks…), Feature request, or Account / billing. Agents can correct it from the conversation; AI assist refines it. Each card shows three lines: reply due, classification, owner.
-   - **Account snapshot** (right panel): health, ARR, CSM and AE, platform status from Snowflake (ERP, sync status, errors in 24h, app version), open Jira tickets, and past conversations with their close reasons.
+   - **Account snapshot:** a one-line strip above the conversation (health, ARR, ERP sync status, open tickets, CSM). Click it for the full snapshot in a side panel: platform status from Snowflake (ERP, sync status, errors in 24h, app version), open Jira tickets, and past conversations with their close reasons.
    - **✨ AI assist:** one click gives a summary, the customer's mood, the likely category, a next step and a draft reply (Claude via the Anthropic API, or a rules-based stand-in in mock mode). **Use this reply** puts the draft in the reply box.
    - **Close with a reason:** closing always asks why (the AI's suggested category is preselected). The reason is tagged in Intercom and logged to Snowflake. The **Closed** tab charts why customers contact support.
    - **Simulate inbound** (Enterprise, angry) is auto-flagged to `#support-escalations`; **Escalate to engineering** (red, and it asks first) opens a Jira bug with an Intercom internal note and a Slack alert; **Close conversation** is a separate button and always asks for a reason. The reply box only sends. SLA countdowns are 1h for Enterprise and 4h for everyone else, and a breach alerts Slack once.
@@ -57,7 +58,7 @@ The same steps, with links, are in the app under the user menu (bottom-left) →
 ## Working in the hub
 
 - **Search:** `Ctrl K` / `⌘K` or `/` jumps to any account, open conversation or page.
-- **Keyboard:** `G` then `H` / `P` / `I` / `O` / `A` / `L` to switch pages, `J` / `K` to move through the inbox, `?` for all shortcuts.
+- **Keyboard:** `G` then `H` / `P` / `I` / `O` / `A` / `L` to switch pages, `J` / `K` to move through the inbox (`Enter` opens), `?` for all shortcuts.
 - **User menu** (bottom-left): switch demo user, light / dark / system theme, demo guide, reset demo data.
 - Irreversible actions (mark a deal lost, reset data) ask for confirmation; hovering a notification keeps it open.
 
