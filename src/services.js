@@ -718,17 +718,37 @@ export async function detectAnomalies(actor) {
   return { found: fresh.length };
 }
 
-export async function acknowledgeAnomaly(id, actor) {
+export async function acknowledgeAnomaly(id, actor, note = '') {
   const an = db.anomalies.find((x) => x.id === id);
   need(an, 404, 'Anomaly not found');
   need(an.status === 'new', 409, 'Already reviewed');
   const a = getAccount(an.accountId);
-  failIfRejected(await hubspot.createNote(a.hubspotCompanyId, `Usage anomaly reviewed by ${actor}: ${anomalyText(an)}`));
-  Object.assign(an, { status: 'acknowledged', reviewedBy: actor, reviewedAt: now() });
+  failIfRejected(await hubspot.createNote(a.hubspotCompanyId, `Usage anomaly reviewed by ${actor}: ${anomalyText(an)}${note?.trim() ? `\nFindings: ${note.trim()}` : ''}`));
+  Object.assign(an, { status: 'acknowledged', reviewedBy: actor, reviewedAt: now(), note: note?.trim() || null });
   await track('usage.anomaly_acknowledged', a.id, actor, { metric: an.metric });
   announce(`Anomaly at ${a.name} marked as reviewed. A note was saved in HubSpot.`, { icon: 'i-done', accountId: a.id });
   changed(a.id);
   return { anomaly: an };
+}
+
+// At-risk account: the CSM starts a save plan. Logged in HubSpot and shared with the AE in Slack.
+export async function startSavePlan(accountId, text, actor) {
+  const a = getAccount(accountId);
+  need(text?.trim(), 400, 'Describe the plan in a sentence or two');
+  need(!a.savePlan, 409, `A save plan is already running (started by ${a.savePlan?.by})`);
+  failIfRejected(await hubspot.createNote(a.hubspotCompanyId, `Save plan started by ${actor}:\n${text.trim()}`));
+  const ae = USERS.find((u) => u.name === a.owner);
+  if (ae?.slackId) {
+    await slack.dm(ae.slackId, ae.name, `${actor} started a save plan for ${a.name}`, [
+      slack.section(`:shield: *Save plan: ${a.name}* (health ${a.health}, ${money(a.deal.amount)} ARR)\n${text.trim()}`),
+      slack.context(`Started by ${actor} (CSM) · <${hubUrl(`/accounts/${a.id}?tab=health`)}|Open in Reeco Hub>`),
+    ]);
+  }
+  a.savePlan = { at: now(), by: actor, text: text.trim() };
+  await track('account.save_plan_started', a.id, actor, {});
+  announce(`Save plan started for ${a.name}. It's in HubSpot${ae ? `, and ${ae.name} (AE) was told in Slack` : ''}.`, { icon: 'i-alert', tone: 'info', accountId: a.id });
+  changed(a.id);
+  return { account: a };
 }
 
 // ---------------------------------------------------------------- CS: feature requests (Jira PROD)

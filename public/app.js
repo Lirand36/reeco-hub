@@ -234,7 +234,7 @@ async function renderHome() {
     </div>
 
     <div class="spread" style="margin-bottom:10px">
-      <h2>Your next best actions <span class="muted" style="font-weight:500">· ${d.actions.length}</span></h2>
+      <h2>Your next suggested actions <span class="muted" style="font-weight:500">· ${d.actions.length}</span></h2>
       ${ctaButton(d.footer)}
     </div>
     <div class="card">
@@ -416,12 +416,12 @@ function replyCell(a) {
   const tone = d >= state.meta.silentDays.high ? 'tone-bad' : d >= state.meta.silentDays.flag ? 'tone-warn' : '';
   return `<span class="${tone}">${d ? `${d}d ago` : 'today'}</span>`;
 }
-const signalTone = (x) => (x.priority === 'high' || x.priority === 'urgent' ? 'bad' : x.type === 'similar' ? 'idea' : x.priority === 'normal' ? 'warn' : 'calm');
+const signalTone = (x) => (x.priority === 'high' || x.priority === 'urgent' ? 'bad' : x.type === 'similar' || x.type === 'tell' ? 'idea' : x.priority === 'normal' ? 'warn' : 'calm');
 // Suggested actions: every suggestion is the same card, "what to do" plus "why", and the whole card is the button.
 // The column shows the top one; "+N more" opens the rest as identical cards underneath.
 // The deal's own next step leads; a colleague's similar win is always an extra suggestion.
 const suggestions = (a) => { const all = a.signals.filter((x) => x.cta); return a.next?.cta ? [a.next, ...all.filter((x) => x !== a.next && x.type !== a.next.type)] : all; };
-const saCard = (a, x) => `<button class="sa t-${signalTone(x)}" data-cta="${esc(a.id)}" data-sig="${esc(x.type)}" title="${esc(x.detail)}">
+const saCard = (a, x, attr = 'cta') => `<button class="sa t-${signalTone(x)}" data-${attr}="${esc(a.id)}" data-sig="${esc(x.key ?? x.type)}" title="${esc(x.detail)}">
     <svg class="ico sa-ico" aria-hidden="true"><use href="#${esc(x.icon)}"/></svg>
     <span class="sa-text"><span class="sa-do">${esc(x.action)}</span><span class="sa-why">${esc(x.why)}</span></span>
     <svg class="ico sa-go" aria-hidden="true"><use href="#i-arrow"/></svg>
@@ -468,7 +468,7 @@ async function renderPipeline(query = new URLSearchParams()) {
       <div><h1>Pipeline</h1><p class="muted">${team ? 'Open deals across the team' : 'Your open deals'} and what each one needs next. Synced with HubSpot.</p></div>
       <div class="row">
         ${can('pipeline.team') ? `<div class="seg seg-inline" role="group" aria-label="Whose deals">
-          <button class="${!team ? 'sel' : ''}" data-plscope="mine" aria-pressed="${!team}">My deals</button>
+          <button class="${!team ? 'sel' : ''}" data-plscope="mine" aria-pressed="${!team}">Mine</button>
           <button class="${team ? 'sel' : ''}" data-plscope="team" aria-pressed="${team}">Team</button>
         </div>` : ''}
         <div class="seg seg-inline" role="group" aria-label="View">
@@ -512,7 +512,7 @@ async function renderPipeline(query = new URLSearchParams()) {
           return `<th class="${c.num ? 'num-col' : ''}" aria-sort="${on ? (state.plSort.dir === 1 ? 'ascending' : 'descending') : 'none'}"><button class="th-sort" data-plsort="${c.id}">${esc(c.label)}<span class="sort-ind" aria-hidden="true">${on ? (state.plSort.dir === 1 ? '▲' : '▼') : ''}</span></button></th>`;
         }).join('')}</tr></thead>
         <tbody>${sorted.map((a) => `
-          <tr>
+          <tr data-href="#/accounts/${esc(a.id)}">
             <td data-label="Deal"><a class="row-link" href="#/accounts/${esc(a.id)}">${esc(a.name)}</a> ${segBadge(a.segment)}<div class="muted xs">${esc(((x) => x[0].toUpperCase() + x.slice(1))(a.deal.name.split(': ')[1] ?? a.deal.name))}</div></td>
             <td data-label="Stage"><select class="input sm" data-move="${esc(a.id)}" aria-label="Stage for ${esc(a.name)}">${state.meta.stages.map((s) => `<option value="${s.id}" ${s.id === a.deal.stage ? 'selected' : ''}>${esc(s.label)}</option>`).join('')}</select>${a.daysInStage != null ? `<div class="muted xs">${a.daysInStage}d in stage</div>` : ''}</td>
             <td data-label="ARR" class="num num-col">${money(a.deal.amount)}</td>
@@ -529,6 +529,8 @@ async function renderPipeline(query = new URLSearchParams()) {
     </div>`}`;
 
   const byId = Object.fromEntries(all.map((a) => [a.id, a]));
+  // Every table row opens its account (except clicks on the row's own controls)
+  $$('.pl-table tbody tr[data-href]').forEach((tr) => tr.addEventListener('click', (e) => { if (!e.target.closest('a, button, select')) location.hash = tr.dataset.href; }));
   $$('[data-plscope]').forEach((b) => b.addEventListener('click', () => { state.plScope = b.dataset.plscope; renderPipeline(); }));
   $$('[data-plview]').forEach((b) => b.addEventListener('click', () => { setPipelineView(b.dataset.plview); renderPipeline(); }));
   $$('[data-plsort]').forEach((b) => b.addEventListener('click', () => {
@@ -635,7 +637,7 @@ async function renderAccounts() {
             <td class="hide-sm small num num-col">${a.usage ? `${a.usage.propertiesLive}/` : ''}${a.properties}</td>
             <td class="hide-sm num num-col">${money(a.deal.amount)}</td>
             <td class="hide-sm num num-col">${a.usage ? moneyCompact(a.usage.spend30d) : '<span class="muted">–</span>'}</td>
-            <td>${healthBar(a.health)}</td>
+            <td>${a.health != null ? riskChip(a.healthLevel, a.health) : '<span class="muted small">Prospect</span>'}</td>
             <td class="hide-sm small num-col">${a.openConversations + a.openTickets ? `${a.openConversations} conv · ${a.openTickets} tickets` : '<span class="muted">–</span>'}</td>
           </tr>`).join('')}</tbody>
       </table>
@@ -712,7 +714,9 @@ const METRIC_TILES = [
 function healthPanel(a) {
   const anomalyFor = (m) => a.anomalies.find((x) => x.metric === m);
   const partTone = (v) => (v >= 70 ? 'good' : v >= 50 ? 'warn' : 'bad');
+  const list = can('portfolio.edit') ? (a.csSuggestions ?? []) : [];
   return `
+    ${list.length ? `<section class="card acct-sa cs-sa"><div class="sa-row-head">Next suggested action${list.length > 1 ? 's' : ''}</div><div class="sa-grid">${list.map((x) => csCard(a, x)).join('')}</div></section>` : ''}
     <div class="health-grid">
       <section class="card card-pad">
         <div class="muted small">Health score</div>
@@ -737,7 +741,7 @@ function healthPanel(a) {
     <section class="card" style="margin-top:16px">
       <div class="card-head">
         <div><h2>Weekly usage · last 12 weeks</h2><div class="muted small">From Snowflake. An anomaly is last week vs the 4 weeks before: a drop of 30%+ or an error spike.</div></div>
-        ${can('anomalies.edit') ? `<button class="btn sm" data-scan>${icon('i-search')}Check for anomalies</button>` : ''}
+        ${can('anomalies.edit') ? `<button class="btn sm" data-scan>${icon('i-search')}Check usage now</button>` : ''}
       </div>
       <div class="metric-grid">
         ${METRIC_TILES.map(([m, label]) => {
@@ -757,8 +761,8 @@ function healthPanel(a) {
       ${a.allAnomalies.length ? a.allAnomalies.map((x) => `
         <div class="list-item">
           <svg class="ico tone-${x.severity}" style="width:18px;height:18px"><use href="#i-alert"/></svg>
-          <div class="grow"><div>${esc(x.text)}</div><div class="muted xs">Detected ${rel(x.detectedAt)}${x.reviewedBy ? ` · reviewed by ${esc(x.reviewedBy)}` : ''}</div></div>
-          ${x.status === 'new' ? (can('anomalies.edit') ? `<button class="btn sm" data-ack="${esc(x.id)}">Mark reviewed</button>` : '<span class="chip warn">To review</span>') : '<span class="chip good">Reviewed</span>'}
+          <div class="grow"><div>${esc(x.text)}</div><div class="muted xs">Detected ${rel(x.detectedAt)}${x.reviewedBy ? ` · reviewed by ${esc(x.reviewedBy)}` : ''}</div>${x.note ? `<div class="small" style="margin-top:4px">“${esc(x.note)}”</div>` : ''}</div>
+          ${x.status === 'new' ? '<span class="chip warn">To review</span>' : '<span class="chip good">Reviewed</span>'}
         </div>`).join('') : '<div class="empty">No anomalies. Usage looks normal.</div>'}
     </section>`;
 }
@@ -865,7 +869,7 @@ async function renderAccount(id, query = new URLSearchParams()) {
           <span class="chip">${a.properties} ${a.properties === 1 ? 'property' : 'properties'} · ${esc(a.region)}</span>
           <span class="chip">AE ${esc(a.owner)} · CSM ${esc(a.csm)}</span>
           ${a.health != null ? riskChip(a.healthLevel, a.health) : ''}
-          ${a.renewalDays != null ? `<span class="chip ${a.renewalDays <= 90 ? 'warn' : ''}">Renewal in ${a.renewalDays} days</span>` : ''}
+          ${a.renewalDays != null ? `<span class="chip ${a.renewalDays <= 90 ? 'warn' : ''}" title="in ${a.renewalDays} days">Renews ${fmtDate(a.renewalDate)}</span>` : ''}
         </div>
       </div>
       <div class="row">
@@ -909,7 +913,7 @@ async function renderAccount(id, query = new URLSearchParams()) {
           <${a.onboarding.completedAt ? 'summary' : 'div'} class="card-head">
             <div><h2>Onboarding · ${doneCount}/${steps.length}</h2>
               <div class="muted small">${a.onboarding.completedAt ? `Completed ${rel(a.onboarding.completedAt)}` : `Day ${days(a.onboarding.startedAt)}`} · Slack <span class="mono">${esc(a.onboarding.slackChannel)}</span> · Jira <span class="mono">${esc(a.onboarding.jiraEpic ?? '')}</span></div></div>
-            ${a.onboarding.completedAt ? `<span class="link small onb-toggle">Show steps</span>` : (can('onboarding.edit') ? `<button class="btn sm" id="sync">${icon('i-reset')}Sync from Snowflake</button>` : '')}
+            ${a.onboarding.completedAt ? `<span class="link small onb-toggle">Show steps</span>` : (can('onboarding.edit') ? `<button class="btn sm" id="sync">${icon('i-reset')}Refresh usage</button>` : '')}
           </${a.onboarding.completedAt ? 'summary' : 'div'}>
           <div class="steps">
             ${steps.map((s) => {
@@ -966,6 +970,7 @@ async function renderAccount(id, query = new URLSearchParams()) {
     $$('.tab-panel').forEach((p) => (p.hidden = p.id !== `panel-${b.dataset.acctTab}`));
   }));
   $$('.acct-sa [data-cta]').forEach((b) => b.addEventListener('click', () => runDealCta(pl, pl.signals.find((x) => x.type === b.dataset.sig), b)));
+  bindCsCards(view, { [a.id]: a });
   bindCsActions(view);
 
   $$('.stage').forEach((b) => b.addEventListener('click', () => {
@@ -1074,7 +1079,7 @@ function snapshotPanel(a, currentId) {
       <div class="spread"><h2>Account snapshot</h2><div class="row" style="gap:4px"><a class="link xs" href="#/accounts/${a.id}">Full account →</a><button class="icon-close" data-close-drawer aria-label="Close"><svg class="ico"><use href="#i-x"/></svg></button></div></div>
       <div class="snap-name">${esc(a.name)}</div>
       <div class="row" style="gap:4px;margin-top:6px">${statusChip(a.status)}<span class="chip">${esc(a.segment)}</span><span class="chip">${money(a.deal.amount)} ARR</span></div>
-      <div style="margin-top:10px">${healthBar(a.health)}</div>
+      <div style="margin-top:10px">${a.health != null ? riskChip(a.healthLevel, a.health) : ''}</div>
       <div class="muted xs" style="margin-top:6px">CSM ${esc(a.csm)} · AE ${esc(a.owner)} · ${a.properties} properties</div>
     </div>
     <div class="snap-sec">
@@ -1318,27 +1323,73 @@ async function simulateInbound(x) {
 }
 
 
+// ---------- customer success: suggested actions (src/cs.js) ----------
+// Same cards as the Pipeline; these open the CS pop-ups below.
+const csCard = (a, x) => saCard(a, x, 'cs');
+function csCell(a) {
+  const list = a.csSuggestions ?? [];
+  if (!list.length) return '<span class="muted small">Nothing to do right now</span>';
+  const open = state.pfOpen?.has(a.id);
+  return `${csCard(a, list[0])}${list.length > 1 ? `<button class="sa-more" data-pfexpand="${esc(a.id)}" aria-expanded="${open}">${open ? 'Hide' : `+${list.length - 1} more`} ${list.length - 1 === 1 ? 'suggestion' : 'suggestions'}</button>` : ''}`;
+}
+const fmtDate = (iso) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+// Renewal as a date (like close dates in the Pipeline); amber within 90 days, "in N days" on hover.
+const renewalCell = (a) => (a.renewalDate ? `<span class="${a.renewalDays <= 90 ? 'tone-warn' : ''}" title="in ${a.renewalDays} days">${fmtDate(a.renewalDate)}</span>` : '<span class="muted">–</span>');
+
+// One pop-up per kind of CS action, shared by My portfolio, the Health tab and Good morning.
+function runCsAction(a, x, after = () => route({ keepScroll: true })) {
+  const head = `<div class="muted small">${esc(a.name)}</div><h2 style="margin-top:4px">${esc(x.action)}</h2><p class="small" style="margin-bottom:12px">${esc(x.detail)}</p>`;
+  if (x.cta.kind === 'anomaly') {
+    return formDialog(`${head}<div class="field"><label for="an-note">What did you find? <span class="muted xs">(optional, saved to HubSpot)</span></label><textarea class="input" id="an-note" name="note" rows="3" placeholder="e.g. NetSuite credentials expired; their IT is fixing it today."></textarea></div>`,
+      'Mark reviewed', (f) => api(`/api/anomalies/${x.cta.anomalyId}/ack`, { method: 'POST', body: { note: f.note.value } }).then(after));
+  }
+  if (x.cta.kind === 'saveplan') {
+    const plan = `1. Exec sponsor call with ${a.contact?.name ?? 'the customer'} this week\n2. Weekly check-in until health is back above 70\n3. Fix the open issues: ${(a.healthReasons ?? []).filter((r) => !r.startsWith('Renewal')).slice(0, 2).join('; ') || 'see the Health tab'}\n4. Align with ${a.owner} (AE) on the renewal`;
+    return formDialog(`${head}<div class="field"><label for="sp-text">The plan</label><textarea class="input" id="sp-text" name="text" rows="6" required>${esc(plan)}</textarea></div><p class="muted small">Saved to HubSpot, and ${esc(a.owner)} (AE) gets it in Slack.</p>`,
+      'Start the save plan', (f) => api(`/api/accounts/${a.id}/save-plan`, { method: 'POST', body: { text: f.text.value } }).then(after));
+  }
+  if (x.cta.kind === 'tell') {
+    return formDialog(`${head}<p class="muted small">Sends ${esc(a.contact?.name ?? 'the customer')} a message in Intercom and saves a note in HubSpot.</p>`,
+      'Send the message', () => api(`/api/feature-requests/${x.cta.frId}/tell`, { method: 'POST', body: { accountId: a.id } }).then(after));
+  }
+  if (x.cta.kind === 'step') {
+    return formDialog(`${head}`, 'Mark done', () => api(`/api/accounts/${a.id}/steps/${x.cta.stepId}`, { method: 'POST' }).then(after));
+  }
+}
+const csSignal = (a, key) => (a.csSuggestions ?? []).find((x) => x.key === key);
+function bindCsCards(root, byId) {
+  $$('[data-cs]', root).forEach((b) => b.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const a = byId[b.dataset.cs];
+    const x = csSignal(a, b.dataset.sig);
+    if (x) runCsAction(a, x);
+  }));
+}
+
 // ---------- my portfolio (CS) ----------
-async function renderPortfolio() {
+async function renderPortfolio(query = new URLSearchParams()) {
   const me = user();
-  state.pfScope ??= me.team === 'cs' ? 'mine' : 'all';
+  state.pfOpen ??= new Set();
+  state.pfScope ??= me.team === 'cs' ? 'mine' : 'team';
   const all = (await api('/api/accounts')).filter((a) => a.status !== 'Prospect');
-  const list = all.filter((a) => state.pfScope === 'all' || a.csm === me.name);
+  const list = all.filter((a) => state.pfScope === 'team' || a.csm === me.name);
   const rank = { high: 0, medium: 1, low: 2 };
   // Highest risk first; within a level, the sooner the renewal and the bigger the ARR, the higher.
   list.sort((x, y) => rank[x.healthLevel] - rank[y.healthLevel] || (x.renewalDays ?? 999) - (y.renewalDays ?? 999) || y.deal.amount - x.deal.amount);
   const atRisk = list.filter((a) => a.healthLevel !== 'low');
   const anoms = list.reduce((n, a) => n + a.anomalies.length, 0);
+  const team = state.pfScope === 'team';
+  const cols = 6;
 
   view.innerHTML = `
     <div class="page-head">
-      <div><h1>My portfolio</h1><p class="muted">Your accounts, riskiest first. Health combines usage trend, adoption, support load, platform stability and sentiment.</p></div>
+      <div><h1>My portfolio</h1><p class="muted">Your accounts, riskiest first, and what each one needs next.</p></div>
       <div class="row">
-        <div class="seg seg-inline" role="group" aria-label="Scope">
-          <button class="${state.pfScope === 'mine' ? 'sel' : ''}" data-scope="mine" aria-pressed="${state.pfScope === 'mine'}">My accounts</button>
-          <button class="${state.pfScope === 'all' ? 'sel' : ''}" data-scope="all" aria-pressed="${state.pfScope === 'all'}">All accounts</button>
+        <div class="seg seg-inline" role="group" aria-label="Whose accounts">
+          <button class="${!team ? 'sel' : ''}" data-scope="mine" aria-pressed="${!team}">Mine</button>
+          <button class="${team ? 'sel' : ''}" data-scope="team" aria-pressed="${team}">Team</button>
         </div>
-        <button class="btn" data-scan>${icon('i-search')}Check for anomalies</button>
+        ${can('anomalies.edit') ? `<button class="btn" data-scan>${icon('i-search')}Check usage now</button>` : ''}
       </div>
     </div>
     <div class="kpis">
@@ -1349,24 +1400,43 @@ async function renderPortfolio() {
     </div>
     <div class="card table-wrap">
       <table class="table pf-table">
-        <thead><tr><th>Account</th><th>Health</th><th>Why</th><th class="hide-sm">Usage (12 wks)</th><th class="hide-sm">Renewal</th><th class="hide-sm">Support</th><th class="hide-sm">Requests</th></tr></thead>
+        <thead><tr><th>Account</th><th>Health</th><th>What's going on</th><th class="hide-sm">Usage (12 wks)</th><th class="hide-sm">Renewal</th><th>Next suggested action</th></tr></thead>
         <tbody>${list.map((a) => {
           const vol = a.usageSeries ? a.usageSeries.pos.map((v, i) => v + a.usageSeries.invoicesAi[i]) : null;
           return `<tr data-href="#/accounts/${a.id}?tab=health">
-            <td><a class="row-link" href="#/accounts/${a.id}?tab=health">${esc(a.name)}</a> ${segBadge(a.segment)}<div class="muted xs">${esc(a.status)} · ${money(a.deal.amount)} ARR${state.pfScope === 'all' ? ` · CSM ${esc(a.csm)}` : ''}</div></td>
-            <td>${riskChip(a.healthLevel, a.health)}</td>
-            <td class="why">${a.anomalies.length ? `<div class="tone-warn small"><svg class="ico" style="width:14px;height:14px;vertical-align:-2px"><use href="#i-alert"/></svg> ${esc(a.anomalies[0].text)}</div>` : ''}${a.healthReasons.filter((r) => !r.startsWith('Usage anomaly')).slice(0, 2).map((r) => `<div class="muted small">${esc(r)}</div>`).join('') || (a.anomalies.length ? '' : '<span class="muted small">No warning signs</span>')}</td>
+            <td data-label="Account"><a class="row-link" href="#/accounts/${a.id}?tab=health">${esc(a.name)}</a> ${segBadge(a.segment)}<div class="muted xs">${esc(a.status)} · ${moneyCompact(a.deal.amount)} ARR${team ? ` · ${esc(a.csm)}` : ''}</div></td>
+            <td data-label="Health">${riskChip(a.healthLevel, a.health)}</td>
+            <td data-label="What's going on" class="small ${a.csStatus?.tone ? `tone-${a.csStatus.tone}` : ''}">${esc(a.csStatus?.text ?? '')}${a.support.open ? `<div class="muted xs">${a.support.open} open support${a.support.escalated ? ` · ${a.support.escalated} with engineering` : ''}</div>` : ''}</td>
             <td class="hide-sm"><div class="row" style="gap:8px;flex-wrap:nowrap">${vol ? sparkline(vol, { label: 'POs + AI invoices per week', w: 110, h: 30 }) : ''}<span class="small">${trendText(a.usageTrendPct)}</span></div></td>
-            <td class="hide-sm small">${a.renewalDays != null ? `<span class="${a.renewalDays <= 90 ? 'tone-warn' : ''}">in ${a.renewalDays} days</span>` : '–'}</td>
-            <td class="hide-sm small">${a.support.open ? `${a.support.open} open${a.support.escalated ? ` · <span class="tone-warn">${a.support.escalated} escalated</span>` : ''}` : '<span class="muted">none</span>'}</td>
-            <td class="hide-sm small">${a.featureRequests.toTell ? `<span class="tone-good">${a.featureRequests.toTell} shipped, tell them</span>` : a.featureRequests.open ? `${a.featureRequests.open} open` : '<span class="muted">–</span>'}</td>
-          </tr>`;
-        }).join('') || '<tr><td colspan="7" class="empty">No accounts in your portfolio.</td></tr>'}</tbody>
+            <td class="hide-sm small">${renewalCell(a)}</td>
+            <td data-label="Next suggested action" class="pl-next">${csCell(a)}</td>
+          </tr>${state.pfOpen.has(a.id) && a.csSuggestions.length > 1 ? `
+          <tr class="sa-row"><td colspan="${cols}">
+            <div class="sa-row-head">More suggestions for ${esc(a.name)}</div>
+            <div class="sa-grid">${a.csSuggestions.slice(1).map((x) => csCard(a, x)).join('')}</div>
+          </td></tr>` : ''}`;
+        }).join('') || `<tr><td colspan="${cols}" class="empty">No accounts in your portfolio.</td></tr>`}</tbody>
       </table>
     </div>`;
+  const byId = Object.fromEntries(all.map((a) => [a.id, a]));
   $$('tbody tr[data-href]').forEach((tr) => tr.addEventListener('click', (e) => { if (!e.target.closest('a, button')) location.hash = tr.dataset.href; }));
   $$('[data-scope]').forEach((b) => b.addEventListener('click', () => { state.pfScope = b.dataset.scope; renderPortfolio(); }));
+  $$('[data-pfexpand]').forEach((b) => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const id = b.dataset.pfexpand;
+    if (state.pfOpen.has(id)) state.pfOpen.delete(id); else state.pfOpen.add(id);
+    renderPortfolio();
+  }));
+  bindCsCards(view, byId);
   bindCsActions(view);
+
+  // Deep links from Good morning: #/portfolio?do=saveplan&acct=meridian
+  const target = byId[query.get('acct')];
+  if (target && query.get('do')) {
+    history.replaceState(null, '', '#/portfolio');
+    const x = csSignal(target, query.get('do'));
+    if (x) runCsAction(target, x);
+  }
 }
 
 // ---------- feature requests ----------
@@ -1420,7 +1490,7 @@ async function renderRequests() {
   const showRequest = state.frGroup !== 'request';
   const showStatus = state.frGroup === 'account'; // other groupings show status in the header
   const cols = 2 + showAccount + showRequest + showStatus;
-  const row = (x) => `<tr>
+  const row = (x) => `<tr data-href="#/accounts/${esc(x.accountId)}?tab=requests">
     ${showAccount ? `<td data-label="Account"><a class="link" href="#/accounts/${esc(x.accountId)}?tab=requests">${esc(x.name)}</a> ${segBadge(x.segment)}<div class="muted xs">${moneyCompact(x.arr)} ARR${state.frScope === 'all' ? ` · CSM ${esc(x.csm)}` : ''}</div></td>` : ''}
     ${showRequest ? `<td data-label="Request"><div style="font-weight:500">${esc(x.fr.title)}</div><div class="row" style="gap:6px"><span class="mono muted xs">${esc(x.fr.jiraKey)}</span>${showStatus ? '' : frSimBtn(x.fr)}</div></td>` : ''}
     ${showStatus ? `<td data-label="Status"><div class="row" style="gap:6px;flex-wrap:nowrap">${frStatus(x.fr.status)}${frSimBtn(x.fr)}</div><div class="muted xs">Updated ${rel(x.fr.updatedAt)}</div></td>` : ''}
@@ -1431,9 +1501,9 @@ async function renderRequests() {
   view.innerHTML = `
     <div class="page-head">
       <div><h1>Feature requests</h1><p class="muted">Who asked for what, where it stands in Jira, and who to tell when it ships.</p></div>
-      <div class="seg seg-inline" role="group" aria-label="Scope">
-        <button class="${state.frScope === 'mine' ? 'sel' : ''}" data-frscope="mine" aria-pressed="${state.frScope === 'mine'}">My accounts</button>
-        <button class="${state.frScope === 'all' ? 'sel' : ''}" data-frscope="all" aria-pressed="${state.frScope === 'all'}">All accounts</button>
+      <div class="seg seg-inline" role="group" aria-label="Whose accounts">
+        <button class="${state.frScope === 'mine' ? 'sel' : ''}" data-frscope="mine" aria-pressed="${state.frScope === 'mine'}">Mine</button>
+        <button class="${state.frScope === 'all' ? 'sel' : ''}" data-frscope="all" aria-pressed="${state.frScope === 'all'}">Team</button>
       </div>
     </div>
     ${toTell.length ? `<div class="card callout"><svg class="ico"><use href="#i-bulb"/></svg><div class="grow"><b>${toTell.length} ${toTell.length === 1 ? 'customer is' : 'customers are'} waiting to hear</b> that their request shipped.</div><button class="btn sm" data-frfilter="shipped">Show shipped</button></div>` : ''}
@@ -1456,6 +1526,7 @@ async function renderRequests() {
         </tbody>`).join('') || `<tbody><tr><td colspan="${cols}" class="empty">No feature requests here.</td></tr></tbody>`}
       </table>
     </div>`;
+  $$('.fr-table tbody tr[data-href]').forEach((tr) => tr.addEventListener('click', (e) => { if (!e.target.closest('a, button')) location.hash = tr.dataset.href; }));
   $$('[data-frscope]').forEach((b) => b.addEventListener('click', () => { state.frScope = b.dataset.frscope; renderRequests(); }));
   $$('[data-frgroup]').forEach((b) => b.addEventListener('click', () => { state.frGroup = b.dataset.frgroup; renderRequests(); }));
   $$('[data-frfilter]').forEach((b) => {
@@ -1468,26 +1539,51 @@ async function renderRequests() {
 
 // ---------- onboarding ----------
 async function renderOnboarding() {
-  const list = (await api('/api/accounts')).filter((a) => a.onboarding);
-  const active = list.filter((a) => a.status === 'Onboarding');
-  const done = list.filter((a) => a.status !== 'Onboarding');
-  const card = (a) => `
-    <a class="card onb-card" href="#/accounts/${a.id}">
-      <div class="spread"><strong>${esc(a.name)}</strong>${statusChip(a.status)}</div>
-      <div class="pips">${Array.from({ length: a.onboarding.total }, (_, i) => `<span class="pip ${i < a.onboarding.done ? 'on' : ''}"></span>`).join('')}</div>
-      <div class="spread small"><span>${a.onboarding.done}/${a.onboarding.total} steps</span>
-        <span class="muted">${a.onboarding.completedAt ? `done in ${days(a.onboarding.startedAt) - days(a.onboarding.completedAt)}d` : `day ${days(a.onboarding.startedAt)}`}</span></div>
-      <div class="row small muted"><span>${a.usage?.propertiesLive ?? 0}/${a.properties} properties live</span>·<span>CSM ${esc(a.csm)}</span></div>
-    </a>`;
+  const all = (await api('/api/accounts')).filter((a) => a.onboarding);
+  state.onbFilter ??= 'active';
+  const filters = [
+    ['active', 'In progress', (a) => a.status === 'Onboarding'],
+    ['live', 'Live', (a) => a.status !== 'Onboarding'],
+    ['all', 'All', () => true],
+  ];
+  const test = filters.find((f) => f[0] === state.onbFilter)[2];
+  const list = all.filter(test).sort((x, y) => (x.status === 'Onboarding') === (y.status === 'Onboarding') ? days(y.onboarding.startedAt) - days(x.onboarding.startedAt) : x.status === 'Onboarding' ? -1 : 1);
+  const anyActive = all.some((a) => a.status === 'Onboarding');
+  const stepCell = (a) => {
+    const x = (a.csSuggestions ?? []).find((s) => s.type === 'step');
+    if (x && can('onboarding.edit')) return csCard(a, x);
+    if (a.onboarding.completedAt) return `<span class="muted small">Live since ${fmtDate(a.onboarding.completedAt)}</span>`;
+    return '<span class="muted small">Waiting on usage (ticks itself off)</span>';
+  };
+
   view.innerHTML = `
     <div class="page-head">
-      <div><h1>Onboarding</h1><p class="muted">Go-live tracking per hotel group. Usage-based steps tick themselves off from Snowflake. Each customer gets a Slack channel and a Jira epic.</p></div>
-      ${active.length ? `<button class="btn" id="sync-all">${icon('i-reset')}Sync all from Snowflake</button>` : ''}
+      <div><h1>Onboarding</h1><p class="muted">Every hotel group from kickoff to go-live. Usage-based steps tick themselves off.</p></div>
+      ${anyActive && can('onboarding.edit') ? `<button class="btn" id="sync-all">${icon('i-reset')}Refresh usage</button>` : ''}
     </div>
-    <h2 style="margin-bottom:10px">In progress · ${active.length}</h2>
-    <div class="onb-grid" style="margin-bottom:26px">${active.map(card).join('') || '<div class="card empty">Nobody onboarding right now. Close a deal from the Pipeline to start one.</div>'}</div>
-    <h2 style="margin-bottom:10px">Live · ${done.length}</h2>
-    <div class="onb-grid">${done.map(card).join('')}</div>`;
+    <div class="filters" style="margin-bottom:12px">${filters.map(([id, label, t]) => `<span class="chip ${state.onbFilter === id ? 'sel' : ''}" role="button" tabindex="0" aria-pressed="${state.onbFilter === id}" data-onbf="${id}">${label} · ${all.filter(t).length}</span>`).join('')}</div>
+    <div class="card table-wrap">
+      <table class="table onb-table">
+        <thead><tr><th>Account</th><th>Progress</th><th>Next suggested action</th><th>Timeline</th><th class="num-col">Properties live</th><th>CSM</th></tr></thead>
+        <tbody>${list.map((a) => `
+          <tr data-href="#/accounts/${esc(a.id)}?tab=overview">
+            <td data-label="Account"><a class="row-link" href="#/accounts/${esc(a.id)}?tab=overview">${esc(a.name)}</a> ${segBadge(a.segment)}<div class="muted xs">${esc(a.status)}</div></td>
+            <td data-label="Progress"><div class="pips" aria-hidden="true">${Array.from({ length: a.onboarding.total }, (_, i) => `<span class="pip ${i < a.onboarding.done ? 'on' : ''}"></span>`).join('')}</div><div class="small" style="margin-top:4px">${a.onboarding.done}/${a.onboarding.total} steps</div></td>
+            <td data-label="Next suggested action" class="pl-next">${stepCell(a)}</td>
+            <td data-label="Timeline" class="small">${a.onboarding.completedAt ? `Done in ${days(a.onboarding.startedAt) - days(a.onboarding.completedAt)} days` : `<span class="${days(a.onboarding.startedAt) > 10 ? 'tone-warn' : ''}">Day ${days(a.onboarding.startedAt)}</span>`}</td>
+            <td data-label="Properties live" class="num num-col small">${a.usage?.propertiesLive ?? 0}/${a.properties}</td>
+            <td data-label="CSM" class="small">${esc(a.csm)}</td>
+          </tr>`).join('') || `<tr><td colspan="6" class="empty">${state.onbFilter === 'active' ? 'Nobody is onboarding right now. Closing a deal starts one automatically.' : 'Nothing here yet.'}</td></tr>`}</tbody>
+      </table>
+    </div>`;
+  const byId = Object.fromEntries(all.map((a) => [a.id, a]));
+  $$('.onb-table tbody tr[data-href]').forEach((tr) => tr.addEventListener('click', (e) => { if (!e.target.closest('a, button')) location.hash = tr.dataset.href; }));
+  $$('[data-onbf]').forEach((c) => {
+    const pick = () => { state.onbFilter = c.dataset.onbf; renderOnboarding(); };
+    c.addEventListener('click', pick);
+    c.addEventListener('keydown', (e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), pick()));
+  });
+  bindCsCards(view, byId);
   $('#sync-all')?.addEventListener('click', (e) => run(e.currentTarget, async () => {
     await api('/api/onboarding/sync', { method: 'POST' });
     route({ keepScroll: true });
@@ -1670,7 +1766,7 @@ function openTour() {
       <li><b>Deal desk.</b> <a class="link" href="#/accounts/northgate">Northgate</a> → <i>Request discount</i> 20%. Then <a class="link" href="#/approvals">Approvals</a> → <i>Simulate Slack click</i>.</li>
       <li><b>Support.</b> As Ron, open the <a class="link" href="#/inbox">Inbox</a>: queues, the <i>Account snapshot</i>, <i>Summarize &amp; draft reply</i>, then <i>Close</i> with a reason.</li>
       <li><b>Customer Success.</b> As Dana, open <a class="link" href="#/portfolio">My portfolio</a>: accounts by risk. Open Meridian's <i>Health &amp; usage</i> tab, then <i>Check for anomalies</i>, and <a class="link" href="#/requests">Feature requests</a> → <i>Tell the customer</i>.</li>
-      <li><b>Onboarding.</b> <a class="link" href="#/onboarding">Onboarding</a> → <i>Sync all from Snowflake</i>. Usage-based steps tick themselves off.</li>
+      <li><b>Onboarding.</b> <a class="link" href="#/onboarding">Onboarding</a> → <i>Refresh usage</i>. Usage-based steps tick themselves off.</li>
       <li><b>Under the hood.</b> The <a class="link" href="#/log">Activity log</a> tells the story of every action in plain words.</li>
     </ol>`, null, null);
   $$('#modal a').forEach((a) => a.addEventListener('click', () => $('#modal').close()));
@@ -1872,7 +1968,7 @@ async function route({ keepScroll = false } = {}) {
     else if (section === 'accounts') await renderAccounts();
     else if (section === 'inbox') await renderInbox(id);
     else if (section === 'onboarding') await renderOnboarding();
-    else if (section === 'portfolio') await renderPortfolio();
+    else if (section === 'portfolio') await renderPortfolio(query);
     else if (section === 'requests') await renderRequests();
     else if (section === 'approvals') await renderApprovals();
     else if (section === 'log') await renderLog(query);
