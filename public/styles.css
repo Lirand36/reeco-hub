@@ -121,6 +121,8 @@ p { margin: 0; }
 .main { padding: 26px 32px 90px; max-width: 1280px; width: 100%; min-width: 0; }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
 .page-head p { margin-top: 4px; }
+.page-head > div:first-child { flex: 1 1 380px; min-width: 0; }
+.page-head > :not(:first-child) { flex: none; }
 .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .spread { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .grow { flex: 1; min-width: 0; }
@@ -239,11 +241,10 @@ textarea.input { resize: vertical; min-height: 44px; }
 @keyframes flash { from { background: var(--warn-soft); } }
 
 /* ---------- onboarding ---------- */
-.onb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
-.onb-card { padding: 18px; display: flex; flex-direction: column; gap: 12px; cursor: pointer; }
-.onb-card:hover { border-color: var(--brand); }
 .pips { display: flex; gap: 4px; }
-.pip { flex: 1; height: 6px; border-radius: 99px; background: var(--surface-2); }
+.pip { flex: 1; height: 6px; border-radius: 99px; background: var(--border); }
+.onb-table .pips { width: 140px; }
+.onb-table td { vertical-align: middle; }
 .pip.on { background: var(--brand); }
 
 /* ---------- approvals ---------- */
@@ -524,8 +525,8 @@ h3.sub { font-size: 13px; font-weight: 600; margin: 16px 0 6px; }
 .fr-dots span.on { background: var(--info); }
 .fr-dots span.on.shipped { background: var(--brand); }
 .fr-toolbar { flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
-.fr-table tbody tr { cursor: default; }
-.fr-table tbody tr:hover { background: transparent; }
+.fr-table tbody tr.group-row { cursor: default; }
+.fr-table tbody tr.group-row:hover { background: transparent; }
 .fr-table td { vertical-align: top; }
 .fr-table td[data-label="Customer"] { white-space: nowrap; }
 .fr-table .group-row th { background: var(--surface-2); color: var(--text); font-size: 14px; font-weight: 500; text-align: left; white-space: normal; padding: 9px 16px; border-top: 1px solid var(--border); position: static; }
@@ -733,10 +734,21 @@ dialog:has(.wide-form) { width: min(560px, calc(100vw - 32px)); }
 /* account page: suggested actions under the deal, finished onboarding folded */
 .acct-sa { padding: 12px 18px 16px; border-top: 1px solid var(--border); }
 .acct-sa .sa-grid { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
-details.onb-card { padding: 0; display: block; }
+details.onb-card { display: block; }
 details.onb-card > summary { list-style: none; cursor: pointer; }
 details.onb-card > summary::-webkit-details-marker { display: none; }
 details.onb-card:not([open]) > summary { border-bottom: 0; }
 details.onb-card[open] .onb-toggle { visibility: hidden; }
 .no-access { max-width: 520px; margin: 40px auto; }
 .no-access > .ico { width: 28px; height: 28px; color: var(--muted); }
+.table tbody tr:not([data-href]) { cursor: default; }
+.table tbody tr.sa-row:hover, .table tbody tr:not([data-href]):hover { background: transparent; }
+.cs-sa { margin-bottom: 16px; }
+@media (max-width: 760px) {
+  .pf-table thead, .onb-table thead { display: none; }
+  .pf-table tbody tr[data-href], .onb-table tbody tr[data-href] { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .pf-table tbody tr[data-href] td, .onb-table tbody tr[data-href] td { display: block; padding: 0; border: 0; max-width: none; }
+  .pf-table td[data-label="Account"], .pf-table td[data-label="What's going on"], .pf-table td[data-label="Next suggested action"],
+  .onb-table td[data-label="Account"], .onb-table td[data-label="Next suggested action"] { grid-column: 1 / -1; }
+  .onb-table td.num-col { text-align: left; }
+}

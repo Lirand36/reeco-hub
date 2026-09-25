@@ -19,7 +19,7 @@ export const ROLES = {
   },
   cs: {
     label: 'Customer Success', home: '#/home', areas: ['cs'],
-    caps: ['portfolio.view', 'onboarding.edit', 'anomalies.edit', 'fr.view', 'fr.edit', 'accounts.view', 'accounts.note', 'tickets.create'],
+    caps: ['portfolio.view', 'portfolio.edit', 'onboarding.edit', 'anomalies.edit', 'fr.view', 'fr.edit', 'accounts.view', 'accounts.note', 'tickets.create'],
     accountTabs: ['health', 'support', 'requests', 'overview'],
   },
   admin: {

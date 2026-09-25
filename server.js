@@ -14,6 +14,7 @@ import * as snowflake from './src/connectors/snowflake.js';
 import * as claude from './src/connectors/claude.js';
 import { CLOSE_REASONS, CONFIG, DEAL_STAGES, FR_STATUSES, ONBOARDING_STEPS, PEOPLE, SILENT_DAYS, STAGE_GATES, USERS, db, reset } from './src/store.js';
 import { dealView, fieldValue, isOpen } from './src/deals.js';
+import { csView } from './src/cs.js';
 import { HEALTH_WEIGHTS, anomalyText, computeHealth } from './src/health.js';
 import * as svc from './src/services.js';
 import { goodMorning } from './src/home.js';
@@ -72,7 +73,7 @@ function actorOf(req) {
 
 const summary = (a) => ({
   id: a.id, name: a.name, domain: a.domain, status: a.status, segment: a.segment, properties: a.properties,
-  region: a.region, owner: a.owner, csm: a.csm, health: a.health, platformErp: a.platform?.erp ?? null,
+  region: a.region, owner: a.owner, csm: a.csm, contact: a.contact, health: a.health, platformErp: a.platform?.erp ?? null,
   deal: a.deal, usage: a.usage,
   onboarding: a.onboarding && {
     done: ONBOARDING_STEPS.filter((s) => a.onboarding.steps[s.id].done).length,
@@ -82,6 +83,7 @@ const summary = (a) => ({
   openConversations: a.conversations.filter((c) => c.state === 'open').length,
   pendingApproval: db.approvals.some((p) => p.accountId === a.id && p.status === 'pending'),
   ...healthView(a),
+  ...csView(a),
 });
 
 function healthView(a) {
@@ -133,6 +135,7 @@ const GUARDS = [
   ['POST', /^\/api\/accounts\/[\w-]+\/tickets$/, 'tickets.create'],
   ['POST', /^\/api\/(accounts\/[\w-]+\/(sync-usage|steps\/\w+)|onboarding\/sync)$/, 'onboarding.edit'],
   ['POST', /^\/api\/anomalies\//, 'anomalies.edit'],
+  ['POST', /^\/api\/accounts\/[\w-]+\/save-plan$/, 'portfolio.edit'],
   ['POST', /^\/api\/feature-requests\//, 'fr.edit'],
   ['POST', /^\/api\/conversations\//, 'inbox.work'],
   ['POST', /^\/api\/approvals\//, 'approvals.decide'],
@@ -167,7 +170,7 @@ const routes = [
     const a = db.accounts.find((x) => x.id === id);
     if (!a) throw new svc.HttpError(404, 'Account not found');
     return {
-      ...a, ...healthView(a),
+      ...a, ...healthView(a), ...csView(a),
       approvals: db.approvals.filter((p) => p.accountId === id),
       allAnomalies: db.anomalies.filter((x) => x.accountId === id).map((x) => ({ ...x, text: anomalyText(x) })),
       featureRequestList: db.featureRequests.filter((f) => f.accounts.some((r) => r.accountId === id)).map(frView),
@@ -201,7 +204,8 @@ const routes = [
   ['POST', /^\/api\/accounts\/([\w-]+)\/tickets$/, (req, [id], b) => svc.openTicket(id, b, actorOf(req).name)],
   ['POST', /^\/api\/accounts\/([\w-]+)\/sync-usage$/, (req, [id]) => svc.syncUsage(id, actorOf(req).name)],
   ['POST', /^\/api\/anomalies\/scan$/, (req) => svc.detectAnomalies(actorOf(req).name)],
-  ['POST', /^\/api\/anomalies\/([\w-]+)\/ack$/, (req, [id]) => svc.acknowledgeAnomaly(id, actorOf(req).name)],
+  ['POST', /^\/api\/anomalies\/([\w-]+)\/ack$/, (req, [id], b) => svc.acknowledgeAnomaly(id, actorOf(req).name, b?.note)],
+  ['POST', /^\/api\/accounts\/([\w-]+)\/save-plan$/, (req, [id], b) => svc.startSavePlan(id, b.text, actorOf(req).name)],
   ['POST', /^\/api\/feature-requests\/([\w-]+)\/tell$/, (req, [id], b) => svc.tellCustomer(id, b.accountId, actorOf(req).name)],
   // Demo: behaves exactly like the Jira webhook moving the issue one status forward
   ['POST', /^\/api\/feature-requests\/([\w-]+)\/advance$/, (req, [id]) => {

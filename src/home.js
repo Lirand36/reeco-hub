@@ -1,8 +1,9 @@
-// "Good morning" dashboard: per-role KPIs plus a ranked list of next best actions.
+// "Good morning" dashboard: per-role KPIs plus a ranked list of next suggested actions.
 // Each action carries a CTA the UI can render as a link or as a one-click API call.
 
 import { CONFIG, DEAL_STAGES, ONBOARDING_STEPS, db } from './store.js';
 import { dealSignals, isOpen } from './deals.js';
+import { accountSuggestions } from './cs.js';
 import { classificationLabel } from './classify.js';
 import { anomalyText, computeHealth } from './health.js';
 
@@ -210,31 +211,18 @@ function cs(user) {
   const healthOf = (a) => computeHealth(a, db.anomalies);
   const actions = [];
 
-  // 1. Usage anomalies from Snowflake
-  for (const an of db.anomalies.filter((x) => x.status === 'new' && mine.some((a) => a.id === x.accountId))) {
-    const a = mine.find((x) => x.id === an.accountId);
-    actions.push({
-      id: `an-${an.id}`, priority: an.severity === 'bad' ? 'urgent' : 'high', icon: 'i-trend-down', sort: 0,
-      title: `Usage anomaly at ${a.name}`, badge: a.segment === 'Enterprise' ? 'Enterprise' : null,
-      detail: `${anomalyText(an)}. Detected by Snowflake ${daysSince(an.detectedAt) ? `${daysSince(an.detectedAt)}d ago` : 'today'}.`,
-      tags: [{ text: 'Snowflake', tone: 'info' }],
-      cta: link('Investigate', `#/accounts/${a.id}?tab=health`),
-      secondary: call('Mark reviewed', `/api/anomalies/${an.id}/ack`, null),
-    });
-  }
-
-  // 2. Accounts at risk, highest risk first
+  // 1. Suggested actions per account (src/cs.js), the same cards as My portfolio and the Health tab.
+  //    Each opens the same pop-up there, so there's one way to do each thing.
   for (const a of mine) {
-    const h = healthOf(a);
-    if (h.level !== 'high' && !(h.level === 'medium' && h.renewalDays != null && h.renewalDays <= 90)) continue;
-    actions.push({
-      id: `risk-${a.id}`, priority: h.level === 'high' ? 'urgent' : 'high', icon: 'i-alert', sort: h.score,
-      title: `${a.name}: ${h.level} risk (health ${h.score})`, badge: a.segment === 'Enterprise' ? 'Enterprise' : null,
-      detail: h.reasons.filter((r) => !r.startsWith('Usage anomaly')).slice(0, 3).join(' · '), // anomalies have their own card
-      tags: [h.renewalDays != null ? { text: `Renewal in ${h.renewalDays} days`, tone: h.renewalDays <= 90 ? 'warn' : '' } : null, { text: `${moneyK(a.deal.amount)} ARR`, tone: '' }].filter(Boolean),
-      cta: link('Open account', `#/accounts/${a.id}?tab=health`),
-      secondary: call('Start save plan', `/api/accounts/${a.id}/notes`, { text: `Save plan started by ${user.name}: exec sponsor call, weekly check-in, fix open issues before renewal.` }),
-    });
+    for (const x of accountSuggestions(a)) {
+      actions.push({
+        id: `cs-${a.id}-${x.key}`, priority: x.priority === 'high' ? 'urgent' : x.priority, icon: x.icon, sort: x.type === 'anomaly' ? 0 : 1,
+        title: `${a.name} · ${x.action}`, badge: a.segment === 'Enterprise' ? 'Enterprise' : null,
+        detail: x.detail,
+        tags: [{ text: x.why, tone: x.priority === 'high' ? 'bad' : 'warn' }, { text: `${moneyK(a.deal.amount)} ARR`, tone: '' }],
+        cta: link(x.cta.label, `#/portfolio?do=${x.key}&acct=${a.id}`),
+      });
+    }
   }
 
   // 3. Support on my accounts: escalations and anything overdue or technical
@@ -244,7 +232,7 @@ function cs(user) {
       if (!important) continue;
       actions.push({
         id: `sup-${c.id}`, priority: c.escalatedTo ? 'high' : 'normal', icon: 'i-inbox', sort: 2,
-        title: `Support: ${a.name}, “${c.subject}”`, badge: a.segment === 'Enterprise' ? 'Enterprise' : null,
+        title: `${a.name} · support: “${c.subject}”`, badge: a.segment === 'Enterprise' ? 'Enterprise' : null,
         detail: `${classificationLabel(c.classification)} · owner ${c.assignee ?? 'unassigned'}${c.escalatedTo ? ` · with engineering (${c.escalatedTo})` : ''}.`,
         tags: [{ text: classificationLabel(c.classification), tone: 'info' }],
         cta: link('View on the account', `#/accounts/${a.id}?tab=support`),
@@ -252,54 +240,12 @@ function cs(user) {
     }
   }
 
-  // 4. Feature requests that shipped: tell the customer
-  for (const f of db.featureRequests.filter((x) => x.status === 'shipped')) {
-    for (const r of f.accounts.filter((x) => !x.notified)) {
-      const a = mine.find((x) => x.id === r.accountId);
-      if (!a) continue;
-      actions.push({
-        id: `fr-${f.id}-${a.id}`, priority: 'high', icon: 'i-bulb', sort: 1,
-        title: `Tell ${a.name}: “${f.title}” is live`,
-        detail: `They asked for it ${daysSince(r.requestedAt) ? `${daysSince(r.requestedAt)} days ago` : 'recently'} (${f.jiraKey}). A quick note builds goodwill${a.renewalDate ? ' before renewal' : ''}.`,
-        tags: [{ text: 'Shipped', tone: 'good' }],
-        cta: call('Tell the customer', `/api/feature-requests/${f.id}/tell`, { accountId: a.id }),
-        secondary: link('Open request', `#/requests`),
-      });
-    }
-  }
-
-  // 5. Onboarding
-  for (const a of onboarding) {
-    const day = daysSince(a.onboarding.startedAt);
-    const next = ONBOARDING_STEPS.find((s) => !s.auto && !a.onboarding.steps[s.id].done);
-    const done = ONBOARDING_STEPS.filter((s) => a.onboarding.steps[s.id].done).length;
-    if (day <= 1 && done === 0) {
-      actions.push({
-        id: `kick-${a.id}`, priority: 'high', icon: 'i-rocket', sort: 0,
-        title: `Kick off ${a.name}`,
-        detail: `New customer: ${a.properties} properties. Introduce yourself in ${a.onboarding.slackChannel} and book the kickoff call.`,
-        tags: [{ text: 'New customer', tone: 'brand' }],
-        cta: link('Open onboarding', `#/accounts/${a.id}`),
-      });
-    }
-    if (next) {
-      actions.push({
-        id: `step-${a.id}-${next.id}`, priority: day > 10 ? 'high' : 'normal', icon: 'i-check', sort: 3,
-        title: `${a.name}: ${next.label}`,
-        detail: `Onboarding day ${day} · ${done}/${ONBOARDING_STEPS.length} steps · ${a.usage?.propertiesLive ?? 0}/${a.properties} properties live.`,
-        tags: day > 10 ? [{ text: `Day ${day}`, tone: 'warn' }] : [],
-        cta: call('Mark done', `/api/accounts/${a.id}/steps/${next.id}`, null),
-        secondary: link('Open', `#/accounts/${a.id}`),
-      });
-    }
-  }
-
   actions.push({
     id: 'scan', priority: 'info', icon: 'i-search', sort: 9,
-    title: 'Check Snowflake for usage anomalies',
-    detail: 'Compares last week with the 4 weeks before for POs, AI invoices, active users and ERP sync errors. Also runs automatically every 30 minutes.',
+    title: 'Check usage for unusual changes',
+    detail: 'Compares last week with the 4 weeks before for POs, AI invoices, active users and ERP sync errors. Also runs by itself every 30 minutes.',
     tags: [],
-    cta: call('Check now', '/api/anomalies/scan', null),
+    cta: call('Check usage now', '/api/anomalies/scan', null),
   });
 
   const scored = mine.map((a) => ({ a, h: healthOf(a) }));
