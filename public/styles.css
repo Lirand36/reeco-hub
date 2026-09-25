@@ -245,6 +245,7 @@ textarea.input { resize: vertical; min-height: 44px; }
 .pip { flex: 1; height: 6px; border-radius: 99px; background: var(--border); }
 .onb-table .pips { width: 140px; }
 .onb-table td { vertical-align: middle; }
+.onb-table td[data-label="Timeline"], .onb-table td[data-label="CSM"] { white-space: nowrap; }
 .pip.on { background: var(--brand); }
 
 /* ---------- approvals ---------- */
@@ -442,6 +443,10 @@ dialog::backdrop { backdrop-filter: blur(2px); }
 .table thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
 .num-col { text-align: right; }
 th.num-col .th-sort { flex-direction: row-reverse; }
+/* Headers follow their column (.table th alone would pull them left) */
+.table th.num-col { text-align: right; }
+.table th.center-col, .table td.center-col { text-align: center; }
+th.center-col .th-sort { justify-content: center; }
 .row-link { font-weight: 600; }
 .row-link:hover { color: var(--brand-ink); }
 .gm-role { align-self: flex-start; }
@@ -750,5 +755,5 @@ details.onb-card[open] .onb-toggle { visibility: hidden; }
   .pf-table tbody tr[data-href] td, .onb-table tbody tr[data-href] td { display: block; padding: 0; border: 0; max-width: none; }
   .pf-table td[data-label="Account"], .pf-table td[data-label="What's going on"], .pf-table td[data-label="Next suggested action"],
   .onb-table td[data-label="Account"], .onb-table td[data-label="Next suggested action"] { grid-column: 1 / -1; }
-  .onb-table td.num-col { text-align: left; }
+  .onb-table td.num-col, .onb-table td.center-col { text-align: left; }
 }

@@ -605,7 +605,7 @@ const ACCOUNT_COLS = [
   { id: 'name', label: 'Account', val: (a) => a.name.toLowerCase() },
   { id: 'status', label: 'Status', val: (a) => ['Live', 'Onboarding', 'Prospect'].indexOf(a.status) },
   { id: 'segment', label: 'Segment', val: (a) => a.segment, sm: true },
-  { id: 'properties', label: 'Properties', val: (a) => a.properties, sm: true, num: true },
+  { id: 'properties', label: 'Properties', val: (a) => a.properties, sm: true, center: true },
   { id: 'arr', label: 'ARR', val: (a) => a.deal.amount, sm: true, num: true },
   { id: 'spend', label: 'Spend via Reeco (30d)', val: (a) => a.usage?.spend30d ?? -1, sm: true, num: true },
   { id: 'health', label: 'Health', val: (a) => a.health ?? -1, num: true },
@@ -627,14 +627,14 @@ async function renderAccounts() {
       <table class="table">
         <thead><tr>${ACCOUNT_COLS.map((c) => {
           const on = c.id === state.acctSort.id;
-          return `<th class="${c.sm ? 'hide-sm' : ''} ${c.num ? 'num-col' : ''}" aria-sort="${on ? (state.acctSort.dir === 1 ? 'ascending' : 'descending') : 'none'}"><button class="th-sort" data-sort="${c.id}">${esc(c.label)}<span class="sort-ind" aria-hidden="true">${on ? (state.acctSort.dir === 1 ? '▲' : '▼') : ''}</span></button></th>`;
+          return `<th class="${c.sm ? 'hide-sm' : ''} ${c.center ? 'center-col' : c.num ? 'num-col' : ''}" aria-sort="${on ? (state.acctSort.dir === 1 ? 'ascending' : 'descending') : 'none'}"><button class="th-sort" data-sort="${c.id}">${esc(c.label)}<span class="sort-ind" aria-hidden="true">${on ? (state.acctSort.dir === 1 ? '▲' : '▼') : ''}</span></button></th>`;
         }).join('')}</tr></thead>
         <tbody>${list.map((a) => `
           <tr data-href="#/accounts/${a.id}" data-q="${esc(`${a.name} ${a.domain} ${a.segment} ${a.status}`.toLowerCase())}">
             <td><a class="row-link" href="#/accounts/${a.id}">${esc(a.name)}</a><div class="muted xs">${esc(a.domain)}</div></td>
             <td>${statusChip(a.status)}</td>
             <td class="hide-sm small">${esc(a.segment)}</td>
-            <td class="hide-sm small num num-col">${a.usage ? `${a.usage.propertiesLive}/` : ''}${a.properties}</td>
+            <td class="hide-sm small num center-col">${a.usage ? `${a.usage.propertiesLive}/` : ''}${a.properties}</td>
             <td class="hide-sm num num-col">${money(a.deal.amount)}</td>
             <td class="hide-sm num num-col">${a.usage ? moneyCompact(a.usage.spend30d) : '<span class="muted">–</span>'}</td>
             <td>${a.health != null ? riskChip(a.healthLevel, a.health) : '<span class="muted small">Prospect</span>'}</td>
@@ -1564,14 +1564,14 @@ async function renderOnboarding() {
     <div class="filters" style="margin-bottom:12px">${filters.map(([id, label, t]) => `<span class="chip ${state.onbFilter === id ? 'sel' : ''}" role="button" tabindex="0" aria-pressed="${state.onbFilter === id}" data-onbf="${id}">${label} · ${all.filter(t).length}</span>`).join('')}</div>
     <div class="card table-wrap">
       <table class="table onb-table">
-        <thead><tr><th>Account</th><th>Progress</th><th>Next suggested action</th><th>Timeline</th><th class="num-col">Properties live</th><th>CSM</th></tr></thead>
+        <thead><tr><th>Account</th><th>Progress</th><th>Next suggested action</th><th>Timeline</th><th class="center-col">Properties live</th><th>CSM</th></tr></thead>
         <tbody>${list.map((a) => `
           <tr data-href="#/accounts/${esc(a.id)}?tab=overview">
             <td data-label="Account"><a class="row-link" href="#/accounts/${esc(a.id)}?tab=overview">${esc(a.name)}</a> ${segBadge(a.segment)}<div class="muted xs">${esc(a.status)}</div></td>
             <td data-label="Progress"><div class="pips" aria-hidden="true">${Array.from({ length: a.onboarding.total }, (_, i) => `<span class="pip ${i < a.onboarding.done ? 'on' : ''}"></span>`).join('')}</div><div class="small" style="margin-top:4px">${a.onboarding.done}/${a.onboarding.total} steps</div></td>
             <td data-label="Next suggested action" class="pl-next">${stepCell(a)}</td>
             <td data-label="Timeline" class="small">${a.onboarding.completedAt ? `Done in ${days(a.onboarding.startedAt) - days(a.onboarding.completedAt)} days` : `<span class="${days(a.onboarding.startedAt) > 10 ? 'tone-warn' : ''}">Day ${days(a.onboarding.startedAt)}</span>`}</td>
-            <td data-label="Properties live" class="num num-col small">${a.usage?.propertiesLive ?? 0}/${a.properties}</td>
+            <td data-label="Properties live" class="num center-col small">${a.usage?.propertiesLive ?? 0}/${a.properties}</td>
             <td data-label="CSM" class="small">${esc(a.csm)}</td>
           </tr>`).join('') || `<tr><td colspan="6" class="empty">${state.onbFilter === 'active' ? 'Nobody is onboarding right now. Closing a deal starts one automatically.' : 'Nothing here yet.'}</td></tr>`}</tbody>
       </table>
