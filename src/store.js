@@ -113,7 +113,7 @@ export const USERS = [
   { id: 'ron', name: 'Ron A.', role: 'Support', team: 'support', access: 'support', intercomAdminId: '5823101' },
   { id: 'tal', name: 'Tal G.', role: 'Support', team: 'support', access: 'support', intercomAdminId: '5823114' },
   { id: 'dana', name: 'Dana S.', role: 'Customer Success', team: 'cs', access: 'cs', slackId: 'U04DANAS' },
-  { id: 'alex', name: 'Alex M.', role: 'Admin (RevOps)', team: 'admin', access: 'admin' },
+  { id: 'alex', name: 'Alex M.', role: 'Admin', team: 'admin', access: 'admin' },
 ];
 
 // 12 weeks of weekly product usage (oldest → newest), as Snowflake's PRODUCT.WEEKLY_USAGE would return it.

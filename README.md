@@ -70,7 +70,7 @@ Each role sees only its own work. Switch user from the menu at the bottom-left t
 | **Sales Manager** (Eitan) | The same for the whole team, and approves discounts |
 | **Support** (Ron, Tal) | Good morning, Accounts, Inbox, Feature requests (view) |
 | **Customer Success** (Dana) | Good morning, Accounts, My portfolio, Onboarding, Feature requests |
-| **Admin** (Alex, RevOps) | Everything, including the Activity log and Connections |
+| **Admin** (Alex) | Everything, including the Activity log and Connections |
 
 - The account page shows each role the tabs it needs (Support lands on Support, CS on Health, Sales on the deal). Other teams' information is read-only; Support still sees ARR and segment for prioritising.
 - Search, keyboard shortcuts and live notifications follow the same rules, and a link to another team's page shows a friendly "not part of your workspace" page.

@@ -267,7 +267,7 @@ function cs(user) {
   };
 }
 
-// ---------------------------------------------------------------- admin (RevOps)
+// ---------------------------------------------------------------- admin
 
 // The whole hub at a glance: what's blocked across Sales, Support and Customer Success.
 function admin(user) {
